@@ -151,6 +151,7 @@ func TestHistoryClaudeCodeSearchAndID(t *testing.T) {
 // tincan history grok-cli reads the owner's $GROK_HOME and leaves out the
 // runs a grok-cli wake recorded beside its tincan config, unless --all.
 func TestHistoryGrokCLI(t *testing.T) {
+	skipOnWindows(t, skipPOSIXPaths)
 	historyEnv(t)
 	base := t.TempDir()
 	grokHome := filepath.Join(base, "grok")

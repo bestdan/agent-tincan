@@ -444,6 +444,7 @@ func TestWebServeDotsNeedsDotWebKind(t *testing.T) {
 }
 
 func TestWebInstallCustomNameAndConfig(t *testing.T) {
+	skipOnWindows(t, skipNoService)
 	home := t.TempDir()
 	setHome(t, home)
 	t.Setenv("PATH", t.TempDir())

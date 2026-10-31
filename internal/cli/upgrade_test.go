@@ -89,7 +89,9 @@ func TestUpgradeReplacesExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.SameFile(before, after) {
+	// Windows loads a FileInfo's file id from its path on first use, so
+	// before would read the new binary; the moved-aside count below covers it.
+	if runtime.GOOS != "windows" && os.SameFile(before, after) {
 		t.Fatal("binary was overwritten in place; want a new inode renamed over it")
 	}
 	if runtime.GOOS != "windows" && after.Mode().Perm() != 0o755 { // Windows has no mode bits

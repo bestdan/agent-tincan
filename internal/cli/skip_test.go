@@ -12,6 +12,8 @@ const (
 	skipRelayHost  = "the relay runs on Linux and macOS only"
 	skipNoShell    = "the command runs through sh -c, so it refuses on Windows"
 	skipSocketWake = "socket wake needs unix sockets and file locks"
+	skipPOSIXPaths = "the fixture records POSIX paths, which are not absolute on Windows"
+	skipNoService  = "web install writes a launchd or systemd definition"
 )
 
 // skipOnWindows skips a single test that cannot hold on Windows and states
