@@ -248,7 +248,7 @@ func renderTopFrame(f topFrame, width, height int) string {
 	if f.refreshError != "" {
 		line(f.refreshError)
 	}
-	line("AGENT            STATE   WAKE         QUEUED OLDEST CLAIMS ANSWERED MEDIAN VERSION")
+	line("AGENT            STATE   WAKE         QUEUED OLDEST CLAIMS   ANS MEDIAN VERSION")
 	agents := slices.Clone(f.roster.Agents)
 	slices.SortStableFunc(agents, func(a, b client.AgentInfo) int {
 		sa, _ := attention(a, f.roster.RelayVersion, f.at)
@@ -322,7 +322,7 @@ func renderTopFrame(f topFrame, width, height int) string {
 		if a.Stats.Finished() > 0 {
 			answered = fmt.Sprintf("%d/%d", a.Stats.Answered, a.Stats.Finished())
 		}
-		line(fmt.Sprintf("%s %s %s %6d %6s %6d %8s %6s %s", topPad(a.Name, 16), topPad(state, 7), topPad(a.Wake, 12), a.Queued, age, a.Claimed, answered, dash(a.Stats.MedianReply()), a.Version))
+		line(fmt.Sprintf("%s %s %s %6d %6s %6d %5s %6s %s", topPad(a.Name, 16), topPad(state, 7), topPad(a.Wake, 12), a.Queued, age, a.Claimed, answered, dash(a.Stats.MedianReply()), a.Version))
 		if len(flags) > 0 {
 			line("  " + strings.Join(flags, " | "))
 		}

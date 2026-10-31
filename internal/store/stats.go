@@ -22,8 +22,10 @@ type AgentStat struct {
 // AgentStats returns the record of every agent with an ask that finished at
 // or after since: counts and durations, never text. Pings and notifies are
 // not work asked of a teammate. A decline, a cancel and an ask still open
-// are not outcomes that say whether it answers, and a hold the owner never
-// approved never reached it. A held ask's reply time starts at its approval,
+// are not outcomes that say whether it answers, a hold the owner never
+// approved never reached it, and an ask that expired on an unanswered
+// clarification was waiting on its asker: only Answer removes the question's
+// reply row. A held ask's reply time starts at its approval,
 // so the owner's delay is not charged to the teammate; with no approval
 // event to read, it counts but has no reply time.
 func (s *Store) AgentStats(ctx context.Context, since time.Time) (map[string]AgentStat, error) {
@@ -32,7 +34,9 @@ func (s *Store) AgentStats(ctx context.Context, since time.Time) (map[string]Age
 		q.created_at
 		FROM requests r LEFT JOIN replies q ON q.request_id = r.id
 		WHERE r.status IN ('answered', 'failed', 'expired') AND r.kind NOT IN ('ping', 'notify')
-		AND NOT (r.was_held = 1 AND r.approved = 0) AND COALESCE(q.created_at, r.updated_at) >= ?`, since.UnixMilli())
+		AND NOT (r.was_held = 1 AND r.approved = 0)
+		AND NOT (r.status = 'expired' AND COALESCE(q.status, '') = 'needs_input')
+		AND COALESCE(q.created_at, r.updated_at) >= ?`, since.UnixMilli())
 	if err != nil {
 		return nil, err
 	}

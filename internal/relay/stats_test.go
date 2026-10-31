@@ -177,17 +177,45 @@ func TestRosterStatsCachedSixtySeconds(t *testing.T) {
 	}
 }
 
-// Windows cache apart, and a caller cycling through windows cannot grow the
-// cache past its bound.
-func TestStatsCacheByWindowIsBounded(t *testing.T) {
+// A caller cycling through windows gets statsCacheSize store reads a minute
+// and then a 429, while windows it already read, the roster's record and its
+// cached entry all keep working. The budget comes back with the TTL.
+func TestStatsWindowsAreBudgeted(t *testing.T) {
 	h, c := newStatsHarness(t)
 	h.finishAsk(c, envelope.StatusAnswered, time.Minute)
-	for i := 1; i <= 3*statsCacheSize; i++ {
-		h.do(grokAddr, "GET", "/v1/stats?since="+time.Duration(i*int(time.Hour)).String(), "", http.StatusOK, nil)
+	roster := func() client.AgentStats {
+		t.Helper()
+		var ro client.Roster
+		h.do(grokAddr, "GET", "/v1/agents", "", http.StatusOK, &ro)
+		return museStats(t, ro.Agents)
+	}
+	if got := roster(); got.Answered != 1 {
+		t.Fatalf("first roster = %+v", got)
+	}
+	h.finishAsk(c, envelope.StatusAnswered, time.Second)
+
+	window := func(i int) string { return "/v1/stats?since=" + time.Duration(i*int(time.Hour)).String() }
+	for i := 1; i <= statsCacheSize; i++ {
+		h.do(grokAddr, "GET", window(i), "", http.StatusOK, nil)
+	}
+	for i := statsCacheSize + 1; i <= 3*statsCacheSize; i++ {
+		rec := h.do(grokAddr, "GET", window(i), "", http.StatusTooManyRequests, nil)
+		if got := rec.Header().Get("Retry-After"); got != "60" {
+			t.Fatalf("Retry-After = %q", got)
+		}
+	}
+	h.do(grokAddr, "GET", window(1), "", http.StatusOK, nil)
+	h.do(grokAddr, "GET", "/v1/stats", "", http.StatusOK, nil)
+	if got := roster(); got.Answered != 1 {
+		t.Fatalf("roster = %+v, want the cached record to survive the windows", got)
 	}
 	h.srv.statsMu.Lock()
-	defer h.srv.statsMu.Unlock()
-	if n := len(h.srv.statsCache); n > statsCacheSize {
-		t.Fatalf("cache holds %d windows, want at most %d", n, statsCacheSize)
+	n := len(h.srv.statsCache)
+	h.srv.statsMu.Unlock()
+	if n != statsCacheSize+1 {
+		t.Fatalf("cache holds %d windows, want %d", n, statsCacheSize+1)
 	}
+
+	c.advance(statsCacheTTL)
+	h.do(grokAddr, "GET", window(3*statsCacheSize), "", http.StatusOK, nil)
 }

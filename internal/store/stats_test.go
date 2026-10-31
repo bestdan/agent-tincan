@@ -79,6 +79,68 @@ func TestAgentStatsCountsFinishedAsks(t *testing.T) {
 	}
 }
 
+// An ask that expires on an unanswered clarification was waiting on its asker,
+// so no window counts it, on either side of the question. One answered in time
+// and a plain expiry from the queue still count.
+func TestAgentStatsLeavesOutExpiryWaitingOnAsker(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	start := c.t
+	question := func() envelope.Request {
+		t.Helper()
+		req := ask(t, s, "grokbot", "muse", "dummy question")
+		if _, err := s.Claim(ctx, req.ID, "muse", time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Reply(ctx, req.ID, "muse", envelope.Reply{Status: envelope.StatusNeedsInput, Body: "dummy question back"}); err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	abandoned := question()
+	c.advance(time.Minute)
+	answered := question()
+	if _, err := s.Answer(ctx, answered.ID, "grokbot", "dummy answer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Claim(ctx, answered.ID, "muse", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reply(ctx, answered.ID, "muse", envelope.Reply{Status: envelope.StatusAnswered, Body: "dummy reply"}); err != nil {
+		t.Fatal(err)
+	}
+	afterReply := c.t.Add(time.Second)
+	c.advance(2 * time.Hour)
+	// A plain expiry from the queue beside it stays counted.
+	silent := ask(t, s, "grokbot", "muse", "dummy question")
+	c.advance(2 * time.Hour)
+	transitions, err := s.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired := map[string]bool{}
+	for _, tr := range transitions {
+		expired[tr.ID] = tr.Status == envelope.StatusExpired
+	}
+	if !expired[abandoned.ID] || !expired[silent.ID] {
+		t.Fatalf("sweep = %+v, want both asks expired", transitions)
+	}
+	for since, want := range map[time.Time]AgentStat{
+		start:      {Answered: 1, Expired: 1},
+		afterReply: {Expired: 1},
+	} {
+		got, err := s.AgentStats(ctx, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		st := got["muse"]
+		st.MedianReply = 0
+		if st != want {
+			t.Fatalf("since %v: muse = %+v, want %+v", since, st, want)
+		}
+	}
+}
+
 func holdFor(t *testing.T, s *Store, agent string, ttl time.Duration) envelope.Request {
 	t.Helper()
 	req, err := s.Enqueue(context.Background(), envelope.Request{From: "grokbot", To: agent, Kind: envelope.KindAsk, Body: "dummy question", Hop: 1, Chain: []string{}, Status: envelope.StatusHeld, HoldTTL: ttl}, 24*time.Hour)

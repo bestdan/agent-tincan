@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -20,10 +21,15 @@ const (
 	// statsCacheTTL keeps roster reads off the store: tincan top reads the
 	// roster every 2 seconds.
 	statsCacheTTL = 60 * time.Second
-	// statsCacheSize bounds the windows held at once, since a caller
-	// chooses the window.
+	// statsCacheSize is how many caller-chosen windows the relay reads per
+	// statsCacheTTL. Each read scans finished asks on the store's one
+	// connection, so the cache is also the budget; the default window sits
+	// outside it, and the roster always has its read.
 	statsCacheSize = 8
 )
+
+// errStatsBusy refuses a window past the budget.
+var errStatsBusy = errors.New("too many stats windows read this minute: try again in a minute")
 
 // statsEntry is one window's record, read at at.
 type statsEntry struct {
@@ -54,13 +60,25 @@ func parseStatsWindow(s string) (time.Duration, error) {
 
 // agentStats returns window's record, reading the store at most once per
 // statsCacheTTL. Holding statsMu across the read lets concurrent callers
-// share it. A failed read is not kept.
+// share it. A failed read is not kept. A window other than the default past
+// statsCacheSize live windows answers errStatsBusy.
 func (s *Server) agentStats(ctx context.Context, window time.Duration) (statsEntry, error) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 	now := s.cfg.Now()
 	if e, ok := s.statsCache[window]; ok && now.Sub(e.at) < statsCacheTTL {
 		return e, nil
+	}
+	live := 0
+	for w, e := range s.statsCache {
+		if now.Sub(e.at) >= statsCacheTTL {
+			delete(s.statsCache, w)
+		} else if w != statsDefaultWindow {
+			live++
+		}
+	}
+	if window != statsDefaultWindow && live >= statsCacheSize {
+		return statsEntry{}, errStatsBusy
 	}
 	since := now.Add(-window)
 	stats, err := s.store.AgentStats(ctx, since)
@@ -70,9 +88,6 @@ func (s *Server) agentStats(ctx context.Context, window time.Duration) (statsEnt
 	e := statsEntry{at: now, since: since, byAgent: make(map[string]client.AgentStats, len(stats))}
 	for agent, st := range stats {
 		e.byAgent[agent] = client.AgentStats{Answered: st.Answered, Failed: st.Failed, Expired: st.Expired, MedianReplyMS: st.MedianReply.Milliseconds()}
-	}
-	if len(s.statsCache) >= statsCacheSize {
-		clear(s.statsCache)
 	}
 	s.statsCache[window] = e
 	return e, nil
@@ -108,6 +123,11 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e, err := s.agentStats(r.Context(), window)
+	if errors.Is(err, errStatsBusy) {
+		w.Header().Set("Retry-After", strconv.Itoa(int(statsCacheTTL/time.Second)))
+		writeErr(w, http.StatusTooManyRequests, err)
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

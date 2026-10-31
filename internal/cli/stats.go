@@ -22,9 +22,11 @@ func statsCmd() *cobra.Command {
 		Long: `Show what happened to the asks sent to each teammate in a window (the last 7
 days by default): how many it answered, how many failed and how many expired,
 and its median reply time over the answered ones. Pings, notifies, declines,
-cancels and open requests do not count. Time a request waited for the owner's
-approval does not count against a teammate. It shows counts and durations,
-never text, and the relay refreshes them at most once a minute.
+cancels, open requests and asks that expired waiting on the asker's answer to
+a clarification do not count. Time a request waited for the owner's approval
+does not count against a teammate. It shows counts and durations, never text,
+and the relay refreshes them at most once a minute and reads at most 8 windows
+other than 7 days a minute.
 
 Works from any joined agent, or from an admin device or the relay host as
 tincan agents does.`,
