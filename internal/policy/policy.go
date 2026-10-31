@@ -175,11 +175,13 @@ func (p *Policy) Prepare(ctx context.Context, req *envelope.Request) error {
 // line is added here, once, for clients that ignore the field: first and with
 // its text framed on what a guest wrote, so it can choose no conversation or
 // form and cannot pass for another request, and through markedBody on what a
-// teammate wrote.
+// teammate wrote. A relay fire (NoParent) reads no claims: its text was fixed
+// when it was scheduled, and a schedule cannot be made under a marked claim
+// or changed after, so what the asker holds at fire time did not lead to it.
 func (p *Policy) markGuest(ctx context.Context, req *envelope.Request, sender identity.Agent, parent envelope.Request, hasParent bool) error {
 	if sender.Guest.Set() {
 		req.FromGuest, req.GuestApproved = true, false
-	} else {
+	} else if !req.NoParent {
 		marked, unapproved, err := p.st.OpenGuestClaims(ctx, req.From)
 		if err != nil {
 			return reject(http.StatusServiceUnavailable, err)

@@ -297,6 +297,48 @@ func TestScheduleRefusedDuringMarkedClaim(t *testing.T) {
 	}
 }
 
+// A fire is not the work of whatever the asker holds when it comes due. Its
+// text was fixed before the guest's ask existed and no route can change it,
+// so a marked claim held at fire time neither marks it nor holds it, and the
+// fire carries nothing of the guest's: the mark has nothing to lose here.
+func TestFireDuringMarkedClaimIsNotMarked(t *testing.T) {
+	for name, noHold := range map[string]bool{"approved": false, "unapproved": true} {
+		t.Run(name, func(t *testing.T) {
+			clk := &scheduleClock{t: time.Now()}
+			m := testrelay.NewWithAdminLogin(t, relay.Config{Now: clk.now})
+			m.Store.SetClock(clk.now)
+			g := m.JoinGuest(t, guestName, client.GuestInvite{Ask: []string{"muse"}, ForSeconds: guestFor, NoHold: noHold})
+			muse := m.Client(t, "muse")
+			if _, err := client.ScheduleAsk(t.Context(), muse, client.ScheduledAsk{To: "instinct", Body: "weekly report", At: clk.now().Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			req := guestAsk(t, g, "guest text")
+			if !noHold {
+				approve(t, m, req.ID)
+			}
+			clk.advance(time.Hour)
+			if _, err := muse.Claim(t.Context(), req.ID); err != nil {
+				t.Fatal(err)
+			}
+			m.Server.Sweep(t.Context())
+			if marked, _, err := m.Store.OpenGuestClaims(t.Context(), "muse"); err != nil || marked != 1 {
+				t.Fatalf("marked claims at the fire = %d, %v", marked, err)
+			}
+			in, err := m.Client(t, "instinct").Poll(t.Context(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(in.Requests) != 1 {
+				t.Fatalf("delivered = %+v", in.Requests)
+			}
+			fire := in.Requests[0]
+			if fire.FromGuest || fire.GuestApproved || fire.Body != "weekly report" {
+				t.Fatalf("fire = %+v", fire)
+			}
+		})
+	}
+}
+
 // Only the relay marks a request. A teammate's from_guest means nothing.
 func TestClientFromGuestIgnored(t *testing.T) {
 	m, _ := guestMesh(t, relay.Config{})
