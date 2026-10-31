@@ -664,7 +664,7 @@ func TestGuestTierCannotChangeQuietly(t *testing.T) {
 	}
 }
 
-// A machine runs guests or teammates, never both, so a guest's machine can
+// A machine runs one guest or only teammates, so a guest's machine can
 // never answer as a teammate by naming one in a header.
 func TestGuestAndTeammateNeverShareAMachine(t *testing.T) {
 	m, _ := guestMesh(t, relay.Config{})

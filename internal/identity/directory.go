@@ -48,9 +48,9 @@ var (
 	// ErrGuestTier refuses making a guest's name a full teammate, or the
 	// other way round, without tincan remove first.
 	ErrGuestTier = errors.New("the name is a guest; run tincan remove first to change its tier")
-	// ErrGuestNode refuses putting a guest and a teammate on one machine,
+	// ErrGuestNode refuses putting a guest on a machine with any other agent,
 	// where a header would choose between them.
-	ErrGuestNode = errors.New("a machine runs guests or teammates, not both")
+	ErrGuestNode = errors.New("a machine runs one guest or only teammates")
 	// ErrGuestNeedsLogin refuses a guest invite on a relay that cannot tell
 	// a guest's login from the owner's: machine names belong to whoever runs
 	// the machine, so the --admin list alone would not keep a guest out.
@@ -537,7 +537,7 @@ func (d *Directory) Join(ctx context.Context, remoteAddr, code string) (string, 
 		return "", err
 	}
 	for _, o := range others {
-		if o.Name != inv.Name && o.Guest.Set() != inv.Guest.Set() {
+		if o.Name != inv.Name && (o.Guest.Set() || inv.Guest.Set()) {
 			return "", fmt.Errorf("%s runs %s: %w", n.Name, o.Name, ErrGuestNode)
 		}
 	}

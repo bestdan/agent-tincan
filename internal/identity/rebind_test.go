@@ -362,3 +362,43 @@ func TestReadmitRechecksBindingAfterNodeCheck(t *testing.T) {
 		})
 	}
 }
+
+// joinAtStatusCheck lands a join while a rebind waits on its old node's
+// status, the gap between choosing the rebind and committing it.
+type joinAtStatusCheck struct {
+	*identitytest.Resolver
+	land func()
+}
+
+func (j *joinAtStatusCheck) NodeOnline(ctx context.Context, id string) (online, found bool, err error) {
+	if land := j.land; land != nil {
+		j.land = nil
+		land()
+	}
+	return j.Resolver.NodeOnline(ctx, id)
+}
+
+// A rebind must not put a teammate on a machine that took a guest while the
+// rebind was checking, which the join lock's check keeps from happening on
+// the join side.
+func TestRebindRefusedOnceTheMachineCarriesAGuest(t *testing.T) {
+	ctx := context.Background()
+	f := newRebindFixture(t, identity.Config{}, newBox)
+	race := &joinAtStatusCheck{Resolver: f.who}
+	dir := identity.NewDirectory(f.store, race, identity.Config{Admins: []string{"macbook-pro-44"}, AdminLogins: []string{matt}})
+	code, err := dir.InviteGuest(ctx, identity.LocalAdmin, "friend", identity.GuestTerms{Until: time.Now().Add(time.Hour), Asks: []string{"muse"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	race.land = func() {
+		if _, err := dir.Join(ctx, rebuiltAddr, code); err != nil {
+			t.Errorf("guest join: %v", err)
+		}
+	}
+	if got, err := dir.Resolve(ctx, rebuiltAddr, "instinct"); !errors.Is(err, identity.ErrNotJoined) {
+		t.Fatalf("resolve = %q, %v", got, err)
+	}
+	if a := agentNamed(t, dir, "instinct"); a.NodeID != "nBOX" {
+		t.Fatalf("instinct moved to %s", a.NodeID)
+	}
+}

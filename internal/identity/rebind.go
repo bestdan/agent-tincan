@@ -172,7 +172,8 @@ func (d *Directory) readmitCandidate(ctx context.Context, n Node, claimed string
 }
 
 // commitRebind moves checked to n under d.mu, provided it is still bound to
-// the node readmitCandidate checked. committed is false when it moved.
+// the node readmitCandidate checked and n has not taken a guest, which shares
+// a machine with no one. committed is false otherwise.
 func (d *Directory) commitRebind(ctx context.Context, n Node, checked Agent) (Resolved, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -181,6 +182,13 @@ func (d *Directory) commitRebind(ctx context.Context, n Node, checked Agent) (Re
 		return Resolved{}, false, err
 	}
 	if !found || a.NodeID != checked.NodeID {
+		return Resolved{}, false, nil
+	}
+	others, err := d.store.AgentsByNode(ctx, n.ID)
+	if err != nil {
+		return Resolved{}, false, err
+	}
+	if carriesGuest(others) {
 		return Resolved{}, false, nil
 	}
 	rb := &Rebind{Agent: a.Name, OldNode: a.NodeID, OldNodeName: a.NodeName, NewNode: n.ID, NewNodeName: n.Name}
