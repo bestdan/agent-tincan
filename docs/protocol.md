@@ -174,7 +174,11 @@ Admin devices and the local admin socket have these endpoints; agent callers
 receive 403:
 
 - `GET /v1/admin/held`: array of request envelopes, with bodies truncated to
-  200 Unicode characters, including sender, chain and target. Each entry may
+  200 Unicode characters, including sender, chain and target. A held follow-on
+  keeps its whole body. The whole bodies of follow-ons and the `then` text of
+  first requests share 3 MiB of the response, oldest first, so it stays under
+  the 4 MiB a client reads. Past that, the text is cut to 200 characters with a
+  note saying how much is not shown. Each entry may
   also carry `to_kind`, the target's kind; for a target of kind `pass`, `pass`
   (`{"source", "conversation_id", "to"}`, parsed from the whole body as the
   pass service will read it) or `pass_error` (why it will fail). A tailnet
@@ -190,6 +194,8 @@ receive 403:
   the reason. Missing reason means an empty reply body.
 
 Approval and denial require an unexpired held request; other states return 409.
+Approving a request whose text the listing cut answers 412 until older requests
+are decided and it fits. Denying one needs no such wait.
 
 A browser caller must also send `{"nonce":"..."}` (with `reason` on a deny),
 the matching nonce from its own held listing. A nonce is bound to the request,

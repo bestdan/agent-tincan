@@ -2215,6 +2215,54 @@ func approvalPreview(body string) string {
 	return string([]rune(body)[:min(200, len([]rune(body)))])
 }
 
+// heldTextBudget is how much of the held listing long text may take on the
+// wire. A client, however old, fails to decode a response past its limit and
+// lists nothing, so the rest of the limit is left to the other fields. One
+// follow-on always fits, so the oldest is always whole.
+const heldTextBudget = client.MaxResponseBytes - 1<<20
+
+// errHeldTextCut refuses approving text the listing could not show.
+var errHeldTextCut = errors.New("this request's whole text is not shown yet: decide older held requests, then list again")
+
+// heldCut sets each held request's follow-on and returns the ids of those
+// whose long text, a follow-on's body or a first request's then, did not fit
+// heldTextBudget. reqs is oldest first and everything after the first that
+// does not fit is cut too, so deciding a request never cuts one the owner
+// has already read.
+func (s *Server) heldCut(ctx context.Context, reqs []envelope.Request) map[string]bool {
+	cut := map[string]bool{}
+	spent := 0
+	for i := range reqs {
+		req := &reqs[i]
+		if then, ok, err := s.store.FollowOnOf(ctx, req.ID); err != nil {
+			log.Printf("held %s: follow-on: %v", req.ID, err)
+		} else if ok {
+			req.Then = &then
+		}
+		text := ""
+		switch {
+		case req.FollowOf != "":
+			text = req.Body
+		case req.Then != nil:
+			text = req.Then.Body
+		default:
+			continue
+		}
+		wire, _ := json.Marshal(text) // the size it has in the response
+		spent += len(wire)
+		if spent > heldTextBudget {
+			cut[req.ID] = true
+		}
+	}
+	return cut
+}
+
+// cutHeldText shortens text the listing has no room for and says so.
+func cutHeldText(text string) string {
+	short := approvalPreview(text)
+	return fmt.Sprintf("%s\n\n[%d more bytes not shown, and it cannot be approved yet: decide older held requests, then list again to read the rest.]", short, len(text)-len(short))
+}
+
 func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 	if !s.isAdmin(r) {
 		writeErr(w, http.StatusForbidden, identity.ErrNotAdmin)
@@ -2253,18 +2301,21 @@ func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.cfg.Now()
 	out := make([]heldRequest, len(reqs))
+	cut := s.heldCut(r.Context(), reqs)
 	kinds := map[string]string{} // target -> kind, for the lookups that succeeded
 	for i, req := range reqs {
 		full := req.Body
 		// A follow-on's reply starts past any preview, and approving
-		// releases it, so the owner reads the whole body.
-		if req.FollowOf == "" {
+		// releases it, so the owner reads the whole body, or is told it is
+		// cut and cannot approve it yet.
+		switch {
+		case req.FollowOf == "":
 			req.Body = approvalPreview(req.Body)
+		case cut[req.ID]:
+			req.Body = cutHeldText(req.Body)
 		}
-		if then, ok, err := s.store.FollowOnOf(r.Context(), req.ID); err != nil {
-			log.Printf("held %s: follow-on: %v", req.ID, err)
-		} else if ok {
-			req.Then = &then
+		if cut[req.ID] && req.Then != nil {
+			req.Then.Body = cutHeldText(req.Then.Body)
 		}
 		out[i] = heldRequest{Request: req}
 		if node != "" {
@@ -2355,6 +2406,15 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Sweep(r.Context())
 	id := r.PathValue("id")
+	reqs, err := s.store.Held(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if s.heldCut(r.Context(), reqs)[id] {
+		writeErr(w, http.StatusPreconditionFailed, errHeldTextCut)
+		return
+	}
 	if page && !s.takeDecisionNonce(r, id, decisionApprove, in.Nonce) {
 		s.writeDecided(w, r, id)
 		return

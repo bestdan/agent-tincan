@@ -912,6 +912,10 @@ func (r *Relay) call(ctx context.Context, c *http.Client, method, path string, i
 	return err
 }
 
+// MaxResponseBytes is the most of a response a client reads. A longer one is
+// cut off and fails to decode.
+const MaxResponseBytes = 4 << 20
+
 func (r *Relay) callOnce(ctx context.Context, c *http.Client, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -935,7 +939,7 @@ func (r *Relay) callOnce(ctx context.Context, c *http.Client, method, path strin
 	}
 	defer resp.Body.Close()
 	r.noteHeld(resp)
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 	if err != nil {
 		return err
 	}

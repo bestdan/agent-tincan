@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -431,6 +432,97 @@ func TestHeldListShowsThen(t *testing.T) {
 	}
 	if len(held) != 1 || held[0].ID != first.ID || held[0].Then == nil || held[0].Then.To != "instinct" || held[0].Then.Body != "file it" {
 		t.Fatalf("held = %+v", held)
+	}
+}
+
+// heldList reads the held listing as a CLI does, through the client's
+// response limit.
+func heldList(t *testing.T, admin *client.Relay) []envelope.Request {
+	t.Helper()
+	var held []envelope.Request
+	if err := admin.Raw(t.Context(), "GET", "/v1/admin/held", nil, &held); err != nil {
+		t.Fatalf("held listing: %v", err)
+	}
+	return held
+}
+
+// Long follow-ons must not push the listing past what a client reads, or
+// the owner lists nothing. The escaped size is what counts: each "<" is six
+// bytes on the wire, so 170 KiB is the most a client can reply with here, and
+// five of them pass 4 MiB. What does not fit waits its turn: it cannot be
+// approved unread, and it shows whole once older requests are decided.
+func TestHeldListFitsLongFollowOns(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	gateTarget(t, m, "instinct")
+	grok, muse, admin := m.Client(t, "grokbot"), m.Client(t, "muse"), m.Client(t, "admin")
+	const replySize = 170 << 10
+	reply := strings.Repeat("<", replySize)
+	for i := range 5 {
+		first := sendThen(t, grok, "muse", "find it", "instinct", fmt.Sprintf("file it %d", i))
+		answer(t, muse, first.ID, reply)
+	}
+
+	held := heldList(t, admin)
+	if len(held) != 5 {
+		t.Fatalf("held %d, want 5", len(held))
+	}
+	if strings.Contains(held[0].Body, "not shown") || len(held[0].Body) < replySize {
+		t.Fatalf("oldest is cut: %d bytes", len(held[0].Body))
+	}
+	last := held[4]
+	if !strings.Contains(last.Body, "not shown") || len(last.Body) > 2000 {
+		t.Fatalf("newest is not cut: %d bytes", len(last.Body))
+	}
+	err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+last.ID+"/approve", nil, nil)
+	if e, ok := errors.AsType[*client.APIError](err); !ok || e.Code != http.StatusPreconditionFailed {
+		t.Fatalf("approve unread: %v", err)
+	}
+	if _, status, err := m.Store.Request(t.Context(), last.ID); err != nil || status != envelope.StatusHeld {
+		t.Fatalf("after refused approve: %s %v", status, err)
+	}
+
+	for _, req := range held[:4] {
+		if err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+req.ID+"/deny", map[string]string{"reason": "no"}, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held = heldList(t, admin)
+	if len(held) != 1 || held[0].ID != last.ID || strings.Contains(held[0].Body, "not shown") || len(held[0].Body) < replySize {
+		t.Fatalf("after deciding the older ones: %d entries", len(held))
+	}
+	if err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+last.ID+"/approve", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A first request's then counts too: it is what approving it sets off.
+func TestHeldListFitsLongThens(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	gateTarget(t, m, "muse")
+	grok, instinct, admin := m.Client(t, "grokbot"), m.Client(t, "instinct"), m.Client(t, "admin")
+	then := strings.Repeat("<", envelope.MaxThenBody)
+	const asks = 45 // two senders, since each may send 30 a minute
+	var last envelope.Request
+	for i := range asks {
+		if i%2 == 0 {
+			last = sendThen(t, grok, "muse", "find it", "instinct", then)
+		} else {
+			last = sendThen(t, instinct, "muse", "find it", "grokbot", then)
+		}
+	}
+	held := heldList(t, admin)
+	if len(held) != asks {
+		t.Fatalf("held %d, want %d", len(held), asks)
+	}
+	if held[0].Then == nil || held[0].Then.Body != then {
+		t.Fatalf("oldest then is cut: %+v", held[0].Then)
+	}
+	if tail := held[asks-1].Then; tail == nil || !strings.Contains(tail.Body, "not shown") {
+		t.Fatalf("newest then is not cut: %+v", tail)
+	}
+	err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+last.ID+"/approve", nil, nil)
+	if e, ok := errors.AsType[*client.APIError](err); !ok || e.Code != http.StatusPreconditionFailed {
+		t.Fatalf("approve unread: %v", err)
 	}
 }
 
