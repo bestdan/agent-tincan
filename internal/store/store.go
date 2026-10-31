@@ -409,13 +409,15 @@ func (s *Store) migrateAgentGoodAt() error {
 }
 
 // migrateProject adds to_project (the project of the session a request is
-// for, "" for any session) and queued_at (when its fallback clock started).
+// for, "" for any session), queued_at (when its fallback clock started) and
+// fallback_woken (whether FallenBack reported it since that clock started).
 // Old rows name no project, so a zero queued_at never counts. It is a no-op
 // on a current table.
 func (s *Store) migrateProject() error {
 	for _, col := range []struct{ name, definition string }{
 		{"to_project", "TEXT NOT NULL DEFAULT ''"},
 		{"queued_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"fallback_woken", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		var has bool
 		if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('requests') WHERE name = ?)`, col.name).Scan(&has); err != nil {
@@ -886,6 +888,24 @@ func (s *Store) DeliverFor(ctx context.Context, agent string, scope QueueScope, 
 	}
 	sortByPriority(out)
 	return out, nil
+}
+
+// FallenBack returns the queued requests that named a project and have now
+// been queued for grace, so any session may take them, each once per fallback
+// clock. A caller that found nothing during the grace has no other reason to
+// look again, so the relay wakes the target for these. A request held back
+// (HoldBack) waits until its time, as Deliver skips it.
+func (s *Store) FallenBack(ctx context.Context, grace time.Duration) ([]envelope.Request, error) {
+	now := s.now()
+	rows, err := s.db.QueryContext(ctx, `UPDATE requests SET fallback_woken = 1
+		WHERE status = ? AND to_project != '' AND fallback_woken = 0 AND queued_at <= ? AND expires_at > ? AND deliver_after <= ?
+		RETURNING `+requestCols,
+		string(envelope.StatusQueued), now.Add(-grace).UnixMilli(), now.UnixMilli(), now.UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanRequests(rows)
 }
 
 // CountQueued returns how many requests are waiting for agent without
@@ -1558,7 +1578,7 @@ func (s *Store) CountHeld(ctx context.Context) (int, error) {
 // here.
 func (s *Store) Release(ctx context.Context, id string, ttl time.Duration) (envelope.Request, error) {
 	now := s.now()
-	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, approved = 1, updated_at = ?, queued_at = ?, expires_at = ? WHERE id = ? AND status = ? AND expires_at > ?`, string(envelope.StatusQueued), now.UnixMilli(), now.UnixMilli(), now.Add(ttl).UnixMilli(), id, string(envelope.StatusHeld), now.UnixMilli())
+	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, approved = 1, updated_at = ?, queued_at = ?, fallback_woken = 0, expires_at = ? WHERE id = ? AND status = ? AND expires_at > ?`, string(envelope.StatusQueued), now.UnixMilli(), now.UnixMilli(), now.Add(ttl).UnixMilli(), id, string(envelope.StatusHeld), now.UnixMilli())
 	if err != nil {
 		return envelope.Request{}, err
 	}

@@ -649,3 +649,35 @@ func TestSocketWakeLockErrorCountsAsFailure(t *testing.T) {
 		t.Fatalf("pushes = %d, want none without the lock", n)
 	}
 }
+
+// A peek that left out a request naming another project has not seen the
+// whole queue, so the push the matching window made must stand: without this
+// that window would push the same request again after every such peek.
+func TestSocketWakeHiddenRequestKeepsDelivery(t *testing.T) {
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	if err := os.MkdirAll(shared.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	saved := time.Now()
+	if err := shared.write(map[string]time.Time{pendingKey("r1"): saved}); err != nil {
+		t.Fatal(err)
+	}
+	var peek client.Waiting
+	if err := json.Unmarshal([]byte(`{"waiting":0,"queued":0,"hidden":1}`), &peek); err != nil {
+		t.Fatal(err)
+	}
+	w := newFakeWindow()
+	later := saved.Add(time.Second)
+	if _, err := pushShared(t.Context(), w, peek, shared, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shared.read()[pendingKey("r1")]; !ok {
+		t.Fatal("a peek that hid a request deleted its delivery")
+	}
+	if _, err := pushShared(t.Context(), w, client.Waiting{}, shared, later); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shared.read()[pendingKey("r1")]; ok {
+		t.Fatal("a peek of the whole queue kept a request that left it")
+	}
+}

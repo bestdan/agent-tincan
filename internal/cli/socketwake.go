@@ -255,8 +255,10 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 		listed[replyKey(rep)] = true
 	}
 	// The pending list is complete when it holds every queued request, so a
-	// request key it leaves out has left the queue.
-	completeQueue := !legacy && len(w.Pending) >= w.Queued
+	// request key it leaves out has left the queue. A request named for
+	// another window's project is still queued, and that window's push of it
+	// must stand.
+	completeQueue := !legacy && w.Hidden == 0 && len(w.Pending) >= w.Queued
 	changed := false
 	for k, at := range rec {
 		switch {

@@ -553,19 +553,41 @@ func (s *Server) Sweep(ctx context.Context) {
 			s.hub.notify(inboxKey(t.To))
 			// An agent woken by the relay has no poller to see the requeue,
 			// so wake it again; pollers are skipped by the waker itself.
-			req := envelope.Request{ID: t.ID, TraceID: t.TraceID, From: t.From, To: t.To, Urgent: t.Urgent}
-			if rq, ok := s.events.(Requeuer); ok {
-				rq.Requeued(ctx, req)
-			} else if s.events != nil {
-				s.events.Queued(ctx, req)
-			}
+			s.wakeRequeued(ctx, envelope.Request{ID: t.ID, TraceID: t.TraceID, From: t.From, To: t.To, Urgent: t.Urgent})
 		}
 	}
+	s.wakeFallenBack(ctx)
 	s.failoverSweep(ctx)
 	if err := s.store.ExpireWatches(ctx); err != nil {
 		log.Printf("watches: expire: %v", err)
 	}
 	s.checkWatches(ctx, "")
+}
+
+// wakeRequeued wakes req's target for a request it may have looked past: a
+// recent poll does not prove anything holds it.
+func (s *Server) wakeRequeued(ctx context.Context, req envelope.Request) {
+	if rq, ok := s.events.(Requeuer); ok {
+		rq.Requeued(ctx, req)
+	} else if s.events != nil {
+		s.events.Queued(ctx, req)
+	}
+}
+
+// wakeFallenBack tells the targets of requests that just opened to any
+// session. An agent woken by the relay polled when the ask arrived and was
+// handed nothing, and that poll ended its follow-ups, so nothing else would
+// send it back. The wake carries no label, like any other.
+func (s *Server) wakeFallenBack(ctx context.Context) {
+	reqs, err := s.store.FallenBack(ctx, SessionGrace)
+	if err != nil {
+		log.Printf("sweep: project fallback: %v", err)
+		return
+	}
+	for _, req := range reqs {
+		s.hub.notify(inboxKey(req.To))
+		s.wakeRequeued(ctx, req)
+	}
 }
 
 func isLocalAdmin(ctx context.Context) bool {
@@ -776,10 +798,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 // withProjectMatch adds to t whether a session of the project req names is
-// live, read after submit so a request that moved reports nothing. A relay
-// too new to know its sessions adds nothing rather than say none is live.
+// live, read after submit so a request that moved reports nothing. A held
+// request reports nothing either: no session can take it, and its fallback
+// clock starts at approval. A relay too new to know its sessions adds nothing
+// rather than say none is live.
 func (s *Server) withProjectMatch(t *envelope.Target, req envelope.Request) *envelope.Target {
-	if req.Project == "" {
+	if req.Project == "" || req.Status == envelope.StatusHeld {
 		return t
 	}
 	now := s.cfg.Now()
@@ -1003,6 +1027,9 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 				if pings > 0 {
 					out["pings"] = pings
 				}
+				if hidden := s.hiddenQueued(r.Context(), name, n); hidden > 0 {
+					out["hidden"] = hidden
+				}
 				if n > 0 {
 					urgent, err := s.store.CountUrgentQueuedFor(r.Context(), name, scope)
 					if err != nil {
@@ -1039,13 +1066,19 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 				return
 			}
-			if v := s.upgradeFor(r); v != "" {
-				out := map[string]any{"upgrade_available": v}
-				out["waiting"], out["queued"] = 0, 0
-				writeJSON(w, http.StatusOK, out)
-			} else {
+			v, hidden := s.upgradeFor(r), s.hiddenQueued(r.Context(), name, 0)
+			if v == "" && hidden == 0 {
 				w.WriteHeader(http.StatusNoContent)
+				return
 			}
+			out := map[string]any{"waiting": 0, "queued": 0}
+			if v != "" {
+				out["upgrade_available"] = v
+			}
+			if hidden > 0 {
+				out["hidden"] = hidden
+			}
+			writeJSON(w, http.StatusOK, out)
 			return
 		}
 		reqs, err := s.store.DeliverFor(r.Context(), name, scope, 20, s.cfg.DeliveryLease)
@@ -1238,6 +1271,19 @@ func (s *Server) touchProject(agent, label string) {
 			delete(m, k)
 		}
 	}
+}
+
+// hiddenQueued is how many of agent's queued requests a peek that saw seen of
+// them left out for naming another project, so a client can tell an empty
+// peek from an empty queue. A failed count reads as none: the peek still
+// reports what it saw.
+func (s *Server) hiddenQueued(ctx context.Context, agent string, seen int) int {
+	total, _, err := s.store.CountQueuedWithPings(ctx, agent)
+	if err != nil {
+		log.Printf("peek: count queued: %v", err)
+		return 0
+	}
+	return max(total-seen, 0)
 }
 
 // noteSocketWake records whether agent's session advertised socket wake on

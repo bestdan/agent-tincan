@@ -103,6 +103,7 @@ type windowPeek struct {
 	Queued  int                `json:"queued"`
 	Urgent  int                `json:"urgent"`
 	Pending []envelope.Pending `json:"pending"`
+	Hidden  int                `json:"hidden"`
 	raw     string
 }
 
@@ -209,23 +210,23 @@ func TestProjectPeekMatchesDelivery(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &scoped); err != nil {
 		t.Fatal(err)
 	}
-	if got := museBeta.peek(h); got.Waiting != 0 || got.Queued != 0 || got.Urgent != 0 || got.Pending != nil {
+	if got := museBeta.peek(h); got.Waiting != 0 || got.Queued != 0 || got.Urgent != 0 || got.Pending != nil || got.Hidden != 1 {
 		t.Fatalf("wrong window's peek = %+v", got)
 	}
 	open := h.send(grokAddr, "muse", "unscoped")
 	got := museBeta.peek(h)
-	if got.Queued != 1 || got.Urgent != 0 || len(got.Pending) != 1 || got.Pending[0].ID != open.ID {
+	if got.Queued != 1 || got.Urgent != 0 || len(got.Pending) != 1 || got.Pending[0].ID != open.ID || got.Hidden != 1 {
 		t.Fatalf("wrong window's peek with an open ask = %+v", got)
 	}
 	got = museAlpha.peek(h)
-	if got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 {
+	if got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 || got.Hidden != 0 {
 		t.Fatalf("matching peek = %+v", got)
 	}
 	if strings.Contains(got.raw, "alpha") {
 		t.Fatalf("peek carries the label: %s", got.raw)
 	}
 	clk.advance(SessionGrace)
-	if got := museBeta.peek(h); got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 {
+	if got := museBeta.peek(h); got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 || got.Hidden != 0 {
 		t.Fatalf("wrong window's peek after fallback = %+v", got)
 	}
 	if ids := museBeta.poll(h); len(ids) != 2 || ids[0] != scoped.ID {
@@ -344,6 +345,9 @@ func TestHeldProjectAskKeepsItsGraceAfterApproval(t *testing.T) {
 	if sent.Status != envelope.StatusHeld {
 		t.Fatalf("status = %s, want held", sent.Status)
 	}
+	if got := projectMatch(t, sent); got != "" {
+		t.Fatalf("held send's project_match = %q, want none: no session can take it yet", got)
+	}
 	clk.advance(30 * time.Minute)
 	h.do(macAddr, "POST", "/v1/admin/requests/"+sent.ID+"/approve", "", http.StatusOK, nil)
 	if got := museBeta.poll(h); len(got) != 0 {
@@ -351,6 +355,52 @@ func TestHeldProjectAskKeepsItsGraceAfterApproval(t *testing.T) {
 	}
 	if got := museAlpha.poll(h); !slices.Equal(got, []string{sent.ID}) {
 		t.Fatalf("matching poll = %v", got)
+	}
+}
+
+// A target reads no label on a request the owner never released.
+func TestDeniedProjectAskHidesLabel(t *testing.T) {
+	h, clk, _ := sweepHarness(t, Config{})
+	clk.advance(SessionGrace)
+	h.srv.SetPreparer(holdAll{})
+	sent := sendProject(h, "alpha", "needs approval")
+	h.do(macAddr, "POST", "/v1/admin/requests/"+sent.ID+"/deny", `{"reason":"no"}`, http.StatusOK, nil)
+	rec := h.raw(museAddr, "GET", "/v1/requests/"+sent.ID, nil, 0, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get: status %d: %s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "alpha") {
+		t.Fatalf("target read the label: %s", rec.Body)
+	}
+}
+
+// An agent woken by the relay polls when the ask arrives and is handed
+// nothing, so the relay wakes it again, once, when the ask falls back.
+func TestProjectFallbackWakesTarget(t *testing.T) {
+	h, clk := projectHarness(t)
+	rec := &requeueRecorder{}
+	h.srv.SetEvents(rec)
+	woken := func() int {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return len(rec.requeued)
+	}
+	sent := sendProject(h, "alpha", "for alpha")
+	if got := museOld.poll(h); len(got) != 0 {
+		t.Fatalf("poll during the grace = %v", got)
+	}
+	h.srv.Sweep(t.Context())
+	if n := woken(); n != 0 {
+		t.Fatalf("wakes during the grace = %d", n)
+	}
+	clk.advance(SessionGrace)
+	h.srv.Sweep(t.Context())
+	h.srv.Sweep(t.Context())
+	if n := woken(); n != 1 {
+		t.Fatalf("wakes at fallback = %d, want 1", n)
+	}
+	if got := museOld.poll(h); !slices.Equal(got, []string{sent.ID}) {
+		t.Fatalf("poll after fallback = %v", got)
 	}
 }
 

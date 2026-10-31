@@ -544,6 +544,10 @@ type Waiting struct {
 	// Pending names the oldest queued requests (id and sender, no body).
 	// A relay that predates it leaves it empty.
 	Pending []envelope.Pending `json:"pending,omitempty"`
+	// Hidden counts queued requests left out because they name another
+	// project, so this peek does not show the agent's whole queue. A relay
+	// that predates it leaves it zero.
+	Hidden int `json:"hidden,omitempty"`
 }
 
 // Poll waits up to hold for requests addressed to this agent or unseen

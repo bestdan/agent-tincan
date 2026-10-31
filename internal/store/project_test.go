@@ -124,20 +124,63 @@ func TestProjectColumnsMigrate(t *testing.T) {
 	s, _ := open(t, path)
 	ctx := context.Background()
 	req := ask(t, s, "asker", "handler", "from before projects")
-	for _, col := range []string{"to_project", "queued_at"} {
+	for _, col := range []string{"to_project", "queued_at", "fallback_woken"} {
 		if _, err := s.db.Exec(`ALTER TABLE requests DROP COLUMN ` + col); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s.Close()
 	s, _ = open(t, path)
-	if err := s.migrateProject(); err != nil {
-		t.Fatal(err)
-	}
 	if reqs := deliverTo(t, s, "beta"); len(reqs) != 1 || reqs[0].ID != req.ID || reqs[0].Project != "" {
 		t.Fatalf("deliver after migration = %+v", reqs)
 	}
+	if err := s.migrateProject(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Claim(ctx, req.ID, "handler", time.Minute); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A request is reported once when it opens to any session, and again only
+// if its fallback clock restarts.
+func TestFallenBackReportsOncePerClock(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	fallen := func() []envelope.Request {
+		t.Helper()
+		reqs, err := s.FallenBack(ctx, projectGrace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reqs
+	}
+	ask(t, s, "asker", "handler", "names no project")
+	req := scopedAsk(t, s, "alpha")
+	if reqs := fallen(); len(reqs) != 0 {
+		t.Fatalf("before the grace = %+v", reqs)
+	}
+	c.advance(projectGrace)
+	if reqs := fallen(); len(reqs) != 1 || reqs[0].ID != req.ID || reqs[0].To != "handler" {
+		t.Fatalf("at the grace = %+v", reqs)
+	}
+	if reqs := fallen(); len(reqs) != 0 {
+		t.Fatalf("second sweep = %+v", reqs)
+	}
+	if _, err := s.Claim(ctx, req.ID, "handler", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Reply(ctx, req.ID, "handler", envelope.Reply{Status: envelope.StatusNeedsInput, Body: "which branch?"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Answer(ctx, req.ID, "asker", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if reqs := fallen(); len(reqs) != 0 {
+		t.Fatalf("right after the answer = %+v", reqs)
+	}
+	c.advance(projectGrace)
+	if reqs := fallen(); len(reqs) != 1 || reqs[0].ID != req.ID {
+		t.Fatalf("after the answer's grace = %+v", reqs)
 	}
 }
