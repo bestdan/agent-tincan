@@ -998,6 +998,21 @@ func TestGatewayGuestIsAGuestAtTheRelay(t *testing.T) {
 	}
 }
 
+// Teammates' record leaves out a gateway guest, as their roster does.
+func TestGatewayGuestNotInTeammatesStats(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	e.guest(t, "pal", "muse")
+	var report client.StatsReport
+	if err := e.m.Client(t, "instinct").Raw(t.Context(), "GET", "/v1/stats", nil, &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range report.Agents {
+		if a.Agent == "pal" {
+			t.Fatalf("stats = %+v", report.Agents)
+		}
+	}
+}
+
 // The relay itself refuses what would make a gateway guest more than a held
 // guest, whatever a client sends. The CLI never sends these.
 func TestConnectGuestRefusesNoHoldAndReplace(t *testing.T) {

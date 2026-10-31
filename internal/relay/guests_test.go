@@ -913,6 +913,31 @@ func TestGuestRosters(t *testing.T) {
 	}
 }
 
+// The record teammates read leaves a guest out, as the roster does, and the
+// roster's stats field names no one. An admin sees it on both.
+func TestStatsHideGuestsFromTeammates(t *testing.T) {
+	m, g := guestMesh(t, relay.Config{})
+	first := deliveredGuestAsk(t, m, g, "start")
+	if _, err := m.Client(t, "muse").Reply(t.Context(), first.ID, "done", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/stats", "/v1/agents"} {
+		var raw json.RawMessage
+		if err := m.Client(t, "instinct").Raw(t.Context(), "GET", path, nil, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), guestName) {
+			t.Errorf("teammate %s names the guest: %s", path, raw)
+		}
+		if err := m.Client(t, "admin").Raw(t.Context(), "GET", path, nil, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), guestName) {
+			t.Errorf("admin %s leaves out the guest: %s", path, raw)
+		}
+	}
+}
+
 // Nothing can be sent to a guest but the relay's own notices.
 func TestTeammatesCannotReachAGuest(t *testing.T) {
 	m, _ := guestMesh(t, relay.Config{})

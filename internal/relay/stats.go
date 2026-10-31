@@ -111,9 +111,11 @@ func (s *Server) addStats(ctx context.Context, roster []client.AgentInfo) {
 }
 
 // handleStats lists every joined agent's record for joined agents and admin
-// devices, as handleAgents does the roster.
+// devices, as handleAgents does the roster: a guest is listed for an admin
+// only.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) && s.agent(w, r) == "" {
+	admin := s.isAdmin(r)
+	if !admin && s.agent(w, r) == "" {
 		return
 	}
 	window, err := parseStatsWindow(r.URL.Query().Get("since"))
@@ -138,6 +140,9 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	}
 	out := client.StatsReport{Since: e.since, Agents: make([]client.AgentStats, 0, len(agents))}
 	for _, a := range agents {
+		if a.Guest.Set() && !admin {
+			continue
+		}
 		st := e.byAgent[a.Name]
 		st.Agent = a.Name
 		out.Agents = append(out.Agents, st)
