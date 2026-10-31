@@ -367,6 +367,16 @@ type Connector interface {
 	Revoke(ctx context.Context, name string) error
 }
 
+// GuestConnector is a Connector that can also bind a gateway guest, which an
+// A2A client always is.
+type GuestConnector interface {
+	// ConnectGuest binds a new virtual guest on terms and returns a one-time
+	// login code and the gateway's base URL.
+	ConnectGuest(ctx context.Context, name string, terms identity.GuestTerms) (code, base string, err error)
+	// Unpublished returns the names a2a.json does not publish.
+	Unpublished(names []string) []string
+}
+
 // SetConnector enables `tincan connect`.
 func (s *Server) SetConnector(c Connector) { s.conn = c }
 
@@ -2272,9 +2282,16 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// Replace lets the connect take a name held by a real tailnet node.
 		// Optional: an older CLI omits it and gets the refusal.
 		Replace bool `json:"replace,omitempty"`
+		// Guest makes this a gateway guest. A client sends it only to a relay
+		// that advertises gateway_guests.
+		Guest *client.GuestInvite `json:"guest,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("name is required"))
+		return
+	}
+	if in.Guest != nil {
+		s.connectGuest(w, r, in.Name, in.Replace, *in.Guest)
 		return
 	}
 	code, url, err := s.conn.Connect(r.Context(), in.Name, in.Replace)

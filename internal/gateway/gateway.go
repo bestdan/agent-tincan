@@ -27,6 +27,7 @@ type Gateway struct {
 	oauth   *OAuth
 	relay   http.Handler // the relay's agent API, called in-process
 	version string
+	a2aFile string // the a2a.json that says who is published, "" for none
 
 	mu       sync.Mutex
 	failures []time.Time // recent bad login codes, for lockout
@@ -50,7 +51,10 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("GET /authorize", g.authorizePage)
 	mux.HandleFunc("POST /authorize", g.authorizeSubmit)
 	mux.HandleFunc("POST /token", g.token)
-	mux.Handle("/mcp", g.requireToken(mcp.NewStreamableHTTPHandler(g.serverFor, &mcp.StreamableHTTPOptions{Stateless: true})))
+	mux.Handle("/mcp", g.requireToken(g.refuseGuests(mcp.NewStreamableHTTPHandler(g.serverFor, &mcp.StreamableHTTPOptions{Stateless: true}))))
+	mux.HandleFunc("GET /.well-known/agent-card.json", g.rootCard)
+	mux.HandleFunc("GET /a2a/{teammate}/.well-known/agent-card.json", g.teammateCard)
+	mux.Handle("POST /a2a/{teammate}", g.whenPublished(g.requireToken(http.HandlerFunc(g.a2a))))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		client.LimitBody(w, r, client.Defaults(client.RelayAPI).MaxBodyBytes)
 		mux.ServeHTTP(w, r)
@@ -82,9 +86,13 @@ func (g *Gateway) serverFor(r *http.Request) *mcp.Server {
 	if s, ok := g.servers.Load(agent); ok {
 		return s.(*mcp.Server)
 	}
-	rc := client.NewRelayHTTP("http://tincan-relay", &http.Client{Transport: inProcess{h: g.relay, addr: identity.VirtualAddr(agent)}})
-	s, _ := g.servers.LoadOrStore(agent, mcpserver.New(rc, g.version))
+	s, _ := g.servers.LoadOrStore(agent, mcpserver.New(g.relayFor(agent), g.version))
 	return s.(*mcp.Server)
+}
+
+// relayFor is a relay client whose calls the relay attributes to agent.
+func (g *Gateway) relayFor(agent string) *client.Relay {
+	return client.NewRelayHTTP("http://tincan-relay", &http.Client{Transport: inProcess{h: g.relay, addr: identity.VirtualAddr(agent)}})
 }
 
 // inProcess serves relay calls without a network hop, stamping the virtual
@@ -318,9 +326,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 // Connector implements relay.Connector for the gateway.
 type Connector struct {
-	Dir   *identity.Directory
-	OAuth *OAuth
-	Base  string
+	Dir     *identity.Directory
+	OAuth   *OAuth
+	Base    string
+	A2AFile string // the a2a.json that says who is published, "" for none
 }
 
 // Connect binds the virtual agent and mints a login code. It refuses a name
@@ -331,6 +340,16 @@ func (c Connector) Connect(ctx context.Context, name string, replace bool) (stri
 	}
 	code, err := c.OAuth.MintLoginCode(ctx, name)
 	return code, strings.TrimRight(c.Base, "/") + "/mcp", err
+}
+
+// ConnectGuest binds a new virtual guest and mints a login code. It returns
+// the gateway's base URL, which agent cards hang off.
+func (c Connector) ConnectGuest(ctx context.Context, name string, terms identity.GuestTerms) (string, string, error) {
+	if err := c.Dir.BindVirtualGuest(ctx, name, terms); err != nil {
+		return "", "", err
+	}
+	code, err := c.OAuth.MintLoginCode(ctx, name)
+	return code, strings.TrimRight(c.Base, "/"), err
 }
 
 // Revoke drops the agent's tokens.

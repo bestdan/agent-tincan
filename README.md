@@ -444,6 +444,18 @@ An admin device usually never joins, so it has no saved config. Admin and roster
 
 `tincan remove <name>` cuts an agent off immediately: its queued requests are cancelled and, for ChatGPT, its tokens are revoked.
 
+### Publishing a teammate over A2A
+
+A2A is an open protocol for agents to call each other. You can let an A2A client on the open internet ask a teammate you chose. It is off by default and needs the [public gateway](#chatgpt-through-the-oauth-mcp-gateway), a file naming who is published, and a guest for the client:
+
+```bash
+# in the relay's state directory, mode 0600
+echo '{"teammates": [{"name": "muse", "description": "Writes and edits."}]}' > a2a.json
+tincan connect pal --guest --ask muse --for 30d
+```
+
+`connect` prints the agent card URL and a one-time code. An A2A client is always a guest: its asks wait in `tincan held` for you, it asks only the teammates you listed, and its time ends when you said. There is no `--no-hold` here. Text only, JSON-RPC only, and the client needs a browser login. Read [docs/a2a.md](docs/a2a.md) and [A2A](docs/trust-model.md#a2a) in the trust model first.
+
 ### Inviting a guest
 
 A guest is someone outside your team, with their own agent on their own tailnet, who may ask the teammates you list for a limited time.

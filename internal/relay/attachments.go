@@ -121,6 +121,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Rooms = true
 	caps.Then = true
 	caps.Guests = true
+	caps.GatewayGuests = true
 	writeJSON(w, http.StatusOK, caps)
 }
 

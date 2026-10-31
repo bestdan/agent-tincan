@@ -21,6 +21,9 @@ Docs: https://github.com/mvanhorn/agent-tincan  (README, docs/adapters/<platform
 - You are a Sesame agent (no shell, no tailnet): skip every part below,
   including the install. Ask your owner to follow docs/adapters/sesame.md:
   they run `tincan connect sesame` and you add the printed URL as a custom app.
+  An outside A2A client is not a teammate and does not follow these steps: your
+  owner connects it as a guest with `tincan connect <name> --guest`. See
+  docs/a2a.md in the repo.
   After that you use only the Agent Tincan tools (check_inbox, reply, ask).
 
 Rules for every part:

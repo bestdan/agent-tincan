@@ -60,6 +60,27 @@ func (d *Directory) BindVirtual(ctx context.Context, name string, replace bool) 
 	return d.store.PutAgent(ctx, Agent{Name: name, NodeID: VirtualAddr(name), NodeName: VirtualAddr(name), JoinedAt: d.cfg.Now(), Kind: prev.Kind})
 }
 
+// BindVirtualGuest joins a guest through the gateway. Like a guest invite it
+// is new-only, whatever holds the name and on whichever machine: a guest
+// cannot take a name, and a live guest's terms are not rewritten here. Its
+// virtual node carries nothing else, so no machine name or login is involved,
+// and adminCaller refuses it whatever the --admin list says.
+func (d *Directory) BindVirtualGuest(ctx context.Context, name string, terms GuestTerms) error {
+	if !nameRE.MatchString(name) {
+		return ErrUnknownAgent
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok, err := d.Agent(ctx, name)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return fmt.Errorf("%s: %w", name, ErrNameTaken)
+	}
+	return d.store.PutAgent(ctx, Agent{Name: name, NodeID: VirtualAddr(name), NodeName: VirtualAddr(name), JoinedAt: d.cfg.Now(), Guest: terms})
+}
+
 // NodeOnline forwards to the wrapped resolver when it implements NodeStatus,
 // so wrapping never hides a still-online old node from re-admission.
 func (v virtualResolver) NodeOnline(ctx context.Context, stableID string) (online, found bool, err error) {

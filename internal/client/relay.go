@@ -735,6 +735,39 @@ func (r *Relay) InviteGuest(ctx context.Context, name string, in GuestInvite) (G
 	return out, nil
 }
 
+// GuestConnected is the relay's answer to connecting a gateway guest. Cards
+// are the A2A agent card URLs of the teammates it may ask, Unpublished the
+// ones among them a2a.json does not publish yet.
+type GuestConnected struct {
+	Code        string    `json:"code"`
+	Cards       []string  `json:"cards,omitempty"`
+	Unpublished []string  `json:"unpublished,omitempty"`
+	GuestUntil  time.Time `json:"guest_until,omitzero"`
+	GuestAsks   []string  `json:"guest_asks,omitempty"`
+	HoldAlerts  bool      `json:"hold_alerts,omitempty"`
+}
+
+// ConnectGuest binds a guest through the gateway and mints its login code
+// (admin devices only), with InviteGuest's two checks: an older relay would
+// ignore the limits and bind a full teammate.
+func (r *Relay) ConnectGuest(ctx context.Context, name string, in GuestInvite) (GuestConnected, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return GuestConnected{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.GatewayGuests {
+		return GuestConnected{}, ErrGuestsUnsupported
+	}
+	var out GuestConnected
+	if err := r.call(ctx, r.api, "POST", "/v1/admin/connect", map[string]any{"name": name, "guest": in}, &out); err != nil {
+		return GuestConnected{}, err
+	}
+	if out.GuestUntil.IsZero() {
+		return GuestConnected{}, ErrGuestsUnsupported
+	}
+	return out, nil
+}
+
 // SetKind records a joined agent's kind; "" clears it (admin devices only).
 func (r *Relay) SetKind(ctx context.Context, name, kind string) error {
 	return r.call(ctx, r.api, "PUT", "/v1/agents/"+url.PathEscape(name)+"/kind", map[string]string{"kind": kind}, nil)

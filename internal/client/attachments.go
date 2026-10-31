@@ -61,7 +61,11 @@ type Capabilities struct {
 	// Guests is set by a relay that honors a guest invite. An older relay
 	// ignores the field and mints a full teammate, so a client never sends
 	// one without this.
-	Guests             bool  `json:"guests,omitempty"`
+	Guests bool `json:"guests,omitempty"`
+	// GatewayGuests is set by a relay whose connect takes a guest's limits.
+	// A relay without it ignores them and binds a full teammate, so a client
+	// never sends one without this.
+	GatewayGuests      bool  `json:"gateway_guests,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`
