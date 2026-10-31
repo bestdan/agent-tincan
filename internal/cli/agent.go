@@ -405,6 +405,9 @@ func formatAgents(agents []client.AgentInfo, now time.Time) string {
 		if goodAt := a.GoodAtField(); goodAt != "" {
 			fmt.Fprintf(&b, " %s", goodAt)
 		}
+		if self := a.SelfField(); self != "" {
+			fmt.Fprintf(&b, " %s", self)
+		}
 		b.WriteString("\n")
 	}
 	if b.Len() == 0 {

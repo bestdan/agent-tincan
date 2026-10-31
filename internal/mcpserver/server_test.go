@@ -135,6 +135,9 @@ func TestToolListIsExactlyTheAgentTools(t *testing.T) {
 	if want := "good_at line for each (the owner's, or a default)"; !strings.Contains(descs["list_agents"], want) {
 		t.Errorf("list_agents description lacks %q: %s", want, descs["list_agents"])
 	}
+	if want := "you at the end of a line marks your own agent"; !strings.Contains(descs["list_agents"], want) {
+		t.Errorf("list_agents description lacks %q: %s", want, descs["list_agents"])
+	}
 	for _, n := range names {
 		if strings.Contains(n, "invite") || strings.Contains(n, "remove") {
 			t.Fatalf("admin action exposed as tool: %s", n)
@@ -1102,6 +1105,37 @@ func TestListAgentsShowsGoodAt(t *testing.T) {
 	}
 	if want := `muse: offline, status=offline, wake=none, never seen, good_at="phone calls, texts; fast pickup"`; muse != want {
 		t.Fatalf("list_agents muse = %q, want %q", muse, want)
+	}
+}
+
+// list_agents ends the caller's own line with you, after good_at, for every
+// window running as that agent, and leaves other lines alone.
+func TestListAgentsMarksCaller(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	if _, err := m.Client(t, "admin").SetGoodAt(t.Context(), "muse", "phone calls"); err != nil {
+		t.Fatal(err)
+	}
+	for _, window := range []string{"window-a", "window-b"} {
+		muse := m.Client(t, "muse")
+		muse.SetSession(window)
+		srvT, cliT := mcp.NewInMemoryTransports()
+		ss, err := mcpserver.New(muse, "test").Connect(t.Context(), srvT, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ss.Close() })
+		cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-client"}, nil).Connect(t.Context(), cliT, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { cs.Close() })
+		out := call(t, cs, "list_agents", nil)
+		if got, want := rosterLine(t, out, "muse"), `, good_at="phone calls", you`; !strings.HasSuffix(got, want) {
+			t.Fatalf("%s: list_agents muse = %q, want it to end %q", window, got, want)
+		}
+		if got := rosterLine(t, out, "grokbot"); strings.HasSuffix(got, "you") {
+			t.Fatalf("%s: list_agents grokbot = %q, want no mark", window, got)
+		}
 	}
 }
 

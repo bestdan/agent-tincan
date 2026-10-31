@@ -285,6 +285,15 @@ func (a AgentInfo) GoodAtField() string {
 	return "good_at=" + strconv.Quote(a.GoodAt)
 }
 
+// SelfField is the mark on the caller's own roster entry, you, shown as the
+// last field. It is empty on every other entry.
+func (a AgentInfo) SelfField() string {
+	if !a.Self {
+		return ""
+	}
+	return "you"
+}
+
 // WorkingOnField is the agent's working-on line as a roster field,
 // working_on="...", quoted like GoodAtField so a title cannot read as more
 // fields, with the number of the agent's other sharing sessions after it,

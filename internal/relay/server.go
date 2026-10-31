@@ -1547,16 +1547,24 @@ func (s *Server) scheduleTarget(every time.Duration, lastPoll, joined, now time.
 
 // handleAgents lists the roster for joined agents and for admin devices,
 // which need not be joined (onboarding runs from an admin laptop). Admin
-// devices also get each agent's node fields.
+// devices also get each agent's node fields. The caller's own entry is
+// marked self. An admin device is not attributed here, so a device that
+// never joined still gets the roster; its entry is only looked up.
 func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	admin := s.isAdmin(r)
-	if !admin && s.agent(w, r) == "" {
+	var self string
+	if admin {
+		self = s.dir.BoundAgent(r.Context(), s.remote(r), r.Header.Get(client.AgentHeader))
+	} else if self = s.agent(w, r); self == "" {
 		return
 	}
 	out, err := s.roster(r.Context(), admin)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	for i := range out {
+		out[i].Self = out[i].Name == self
 	}
 	res := map[string]any{"agents": out}
 	if s.cfg.Version != "" {

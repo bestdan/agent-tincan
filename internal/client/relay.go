@@ -115,6 +115,11 @@ type AgentInfo struct {
 	NodeID   string `json:"node_id,omitempty"`
 	NodeName string `json:"node_name,omitempty"`
 	NodeUser string `json:"node_user,omitempty"`
+	// Self marks the caller's own entry, so an agent can tell itself from a
+	// teammate when several of its windows share its name. The relay sets
+	// it only on the entry of the agent the caller resolves to. False from
+	// relays that predate it.
+	Self bool `json:"self,omitempty"`
 	// Target carries the relay's schedule facts for an agent on wake method
 	// schedule, or its last wake for a webhook or email agent the relay has
 	// woken, and is left out otherwise and by older relays. Its fields sit
