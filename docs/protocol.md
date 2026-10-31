@@ -10,7 +10,7 @@ The relay answers 403 to any request whose `Host` is not one of its own addresse
 |---|---|---|
 | `id` | relay | Request id, assigned when queued. |
 | `from` | relay | Sending agent, resolved from the tailnet node. A client-supplied value is ignored. |
-| `from_guest` | relay | Set on a guest's ask and on anything a teammate sends while it holds work a guest's ask led to. A client-supplied value is ignored. See [Guests](#guests). |
+| `from_guest` | relay | Set on a guest's ask and on anything a teammate sends while it holds work a guest's ask led to, except a relay fire of a scheduled ask (see Scheduled asks). A client-supplied value is ignored. See [Guests](#guests). |
 | `guest_approved` | relay | Set when the owner approved the guest's ask behind this request. A client-supplied value is ignored. |
 | `to` | client | Target agent name. Must differ from the sender. |
 | `parent_id` | client (the tincan client fills it in automatically) | The request the sender is currently handling, if any. The relay uses it to continue that request's chain. A client that names a session continues only that session's work; see Sessions within one agent. |
@@ -424,7 +424,7 @@ A send to a guest, a `then` to a guest, a watch on a guest (404, as for an unkno
 
 Teammates' rosters leave guests out. An admin's roster lists them with `guest_until`. A note to a guest suggests only its listed teammates, and a note to anyone else never suggests a guest.
 
-`Prepare` marks a request `from_guest` when a guest sent it, or when its sender holds a claim on a marked request, however the request found its parent: a named `parent_id`, the session guard, or several open claims. It puts this line and a blank line in front of the body, once, for clients that ignore the field. A teammate's threading line (`new chat`, `conversation: <id>`) stays first with this line after it, and a request to a council, pass, notes or history agent gets no line, since those parse the body as a form. A request stays marked in `from_guest` either way:
+`Prepare` marks a request `from_guest` when a guest sent it, or when its sender holds a claim on a marked request, however the request found its parent: a named `parent_id`, the session guard, or several open claims. The one exception is a relay fire of a scheduled ask (see Scheduled asks). It puts this line and a blank line in front of the body, once, for clients that ignore the field. A teammate's threading line (`new chat`, `conversation: <id>`) stays first with this line after it, and a request to a council, pass, notes or history agent gets no line, since those parse the body as a form. A request stays marked in `from_guest` either way:
 
 ```text
 [Agent Tincan: this request comes from a guest, outside the team.]
@@ -510,7 +510,7 @@ An entry may also include `stats`: the agent's record for asks finished in the l
 
 Every entry from a current relay includes `status`, the relay's one word for what the agent is doing, computed in one place so every surface shows the same thing:
 
-- `busy`: the agent holds a request with a live claim lease, or one of its sessions' hosts reports it busy (below). For a claim, `busy_for` names the asker of the agent's oldest live claim and `busy_since` is when that claim began; a host-reported busy names neither. The roster never carries a request's text or progress note.
+- `busy`: the agent holds a request with a live claim lease, or one of its sessions' hosts reports it busy (below). For a claim, `busy_for` names the asker of the agent's oldest live claim and `busy_since` is when that claim began; a host-reported busy names neither. A guest is named to an admin only: for anyone else `busy_for` is left out and `busy_since` stays. The roster never carries a request's text or progress note.
 - `stuck`: work waits on the agent and nothing is moving. `status_reason` says which: `claim lapsed` (a claim's lease ran out with no progress note and the relay put the request back in the queue; it stays until the agent claims or answers it), `woken, silent 15m` (a relay-woken agent that has not checked in since its last wake, as `unanswered`), `overdue check` (a schedule agent that has missed its checks, as `overdue`), `3 queued while offline` (work queued for an offline agent the relay does not wake), or `oldest queued 2h` (a request untaken for over an hour). Stuck wins over busy. Nothing is reported stuck in the first claim lease (30 minutes by default) after the relay starts.
 - `limited`: a web agent that is polling now and whose site reported it out of messages (see Web authentication observations) until `limited_until`, which the entry carries; `status_reason` is `until 14:00 UTC`. Limited wins over stuck and busy, since nothing it is sent goes out before then. It ends when the reset passes or the agent reports `authenticated`.
 - `idle`: none of the above, and the agent is polling now (`online`).
@@ -580,7 +580,7 @@ A scheduled ask is an ask the relay sends later, once or on a repeat. The relay 
 | `at` | Optional RFC 3339 time of the first fire. Must be in the future. |
 | `every_seconds` | Optional repeat, from 900 (15 minutes) to 31622400 (366 days). Without `at` the first fire is one interval from now. |
 
-One of `at` and `every_seconds` is required. `parent_id`, `group`, `also`, `attachments`, `project`, `then` and any `kind` but `ask` are refused with 400: a fire starts a new chain, goes to one teammate, and carries no files, no project label and no follow-on. A caller with an open claim is refused with 409, by the lookup a send uses to continue a chain (the session's own claim, else the agent's one claim). So is a caller holding any claim on a marked request (see Guests), however many other claims it holds, because a fire carries no mark. An agent has at most 32 live schedules; the 33rd is refused with 409. Nothing is checked against `approval.json` here: the owner's holds apply at fire time.
+One of `at` and `every_seconds` is required. `parent_id`, `group`, `also`, `attachments`, `project`, `then` and any `kind` but `ask` are refused with 400: a fire starts a new chain, goes to one teammate, and carries no files, no project label and no follow-on. A caller with an open claim is refused with 409, by the lookup a send uses to continue a chain (the session's own claim, else the agent's one claim). So is a caller with an open marked ask (see Guests) that has reached it, one `queued`, `delivered`, `claimed` or `needs_input` but not `held`, however many other claims it holds, because a fire carries no mark. An agent has at most 32 live schedules; the 33rd is refused with 409. Nothing is checked against `approval.json` here: the owner's holds apply at fire time.
 
 A schedule is `{"id", "from", "to", "body", "urgent", "next_at", "every_seconds", "created_at", "last_request", "blocked"}`. `urgent`, `every_seconds`, `last_request` (the request its latest fire made) and `blocked` (its latest fire was rejected) are left out when empty. Ids are never reused.
 
@@ -590,7 +590,7 @@ The relay fires what is due on every sweep, its periodic pass over expiries and 
 
 1. Moves the schedule first: a one-shot is deleted, and a recurring schedule moves to its next time after now, in one update conditional on the `next_at` it read. Only the sweep that won that update goes on, so racing sweeps send once. A relay that stops between this step and the next loses that occurrence rather than sending it twice.
 2. Skips the occurrence, for a recurring schedule, while `last_request` is open (held, queued, delivered, claimed or needing input).
-3. Checks the target as a send does, then sends through the path a send takes: loop, hop and rate checks, the owner's holds, delivery, wake and failover. The request has a new `id` and trace, `hop` 1 and `chain` of the owner alone, whatever claims the owner holds. Those claims do not mark it or hold it as a guest's either: its text was fixed before they opened, since a schedule cannot be made under a marked claim or changed afterwards. Its TTL runs from the fire. Client fields cannot ask for this: only the relay starts a chain this way.
+3. Checks the target as a send does, then sends through the path a send takes: loop, hop and rate checks, the owner's holds, delivery, wake and failover. The request has a new `id` and trace, `hop` 1 and `chain` of the owner alone, whatever claims the owner holds. Those claims do not mark it or hold it as a guest's either: its text was fixed before they opened, since a schedule cannot be made while a marked ask is open with its owner or changed afterwards. Its TTL runs from the fire. Client fields cannot ask for this: only the relay starts a chain this way.
 
 Occurrences missed while the relay was down fire once, then the next time lands after now on the schedule's own cadence, with no catch-up burst.
 
