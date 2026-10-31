@@ -61,3 +61,36 @@ func TestInviteGuestRefusesACodeWithNoLimits(t *testing.T) {
 		t.Fatalf("error carries the code: %v", err)
 	}
 }
+
+// An older relay would drop the guest field and bind a full teammate, so
+// ConnectGuest asks first, and a relay that takes the call but does not echo
+// the limits gets no code out of the client.
+func TestConnectGuestRefusesRelayWithoutSupport(t *testing.T) {
+	for name, tc := range map[string]struct {
+		caps    string
+		connect string
+		calls   int
+	}{
+		"no capability": {caps: `{"guests":true}`, calls: 0},
+		"no echo":       {caps: `{"guests":true,"gateway_guests":true}`, connect: `{"name":"pal","code":"AAAA-BBBB","url":"https://example.test/mcp"}`, calls: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			connects := 0
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/capabilities":
+					_, _ = w.Write([]byte(tc.caps))
+				case "/v1/admin/connect":
+					connects++
+					_, _ = w.Write([]byte(tc.connect))
+				}
+			}))
+			defer ts.Close()
+			r := client.NewRelayHTTP(ts.URL, ts.Client())
+			out, err := r.ConnectGuest(t.Context(), "pal", client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600})
+			if !errors.Is(err, client.ErrGuestsUnsupported) || out.Code != "" || connects != tc.calls {
+				t.Fatalf("out = %+v, err = %v, connects = %d", out, err, connects)
+			}
+		})
+	}
+}

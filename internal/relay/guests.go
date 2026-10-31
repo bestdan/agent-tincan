@@ -56,30 +56,70 @@ func (s *Server) inviteGuest(w http.ResponseWriter, r *http.Request, name, kind 
 		writeErr(w, http.StatusBadRequest, errors.New("a guest takes no kind"))
 		return
 	}
-	term := time.Duration(in.ForSeconds) * time.Second
-	if term <= 0 || term > MaxGuestTerm {
-		writeErr(w, http.StatusBadRequest, errors.New("a guest's term must be above zero and at most 30 days"))
+	terms, err := s.guestTerms(r, name, in)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if len(in.Ask) == 0 {
-		writeErr(w, http.StatusBadRequest, errors.New("a guest must be listed for at least one teammate"))
-		return
-	}
-	for _, to := range in.Ask {
-		if err := s.guestTarget(r, name, to); err != nil {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	until := s.cfg.Now().Add(term).UTC().Truncate(time.Millisecond)
-	code, err := s.dir.InviteGuest(r.Context(), s.remote(r), name, identity.GuestTerms{Until: until, Asks: in.Ask, NoHold: in.NoHold})
+	code, err := s.dir.InviteGuest(r.Context(), s.remote(r), name, terms)
 	if err != nil {
 		writeErr(w, statusFor(err), err)
 		return
 	}
-	s.record(r.Context(), "guest_invited", "", "", name, store.DetailJSON(map[string]any{"guest_asks": in.Ask, "guest_until": until, "no_hold": in.NoHold}))
+	s.record(r.Context(), "guest_invited", "", "", name, store.DetailJSON(map[string]any{"guest_asks": in.Ask, "guest_until": terms.Until, "no_hold": in.NoHold}))
 	writeJSON(w, http.StatusOK, map[string]any{"name": name, "code": code, "expires_in": identity.InviteTTL.String(),
-		"guest_until": until, "guest_asks": in.Ask, "hold_alerts": s.holdAlerts(r)})
+		"guest_until": terms.Until, "guest_asks": in.Ask, "hold_alerts": s.holdAlerts(r)})
+}
+
+// guestTerms checks a guest's term and list and turns them into its terms,
+// with the term starting now.
+func (s *Server) guestTerms(r *http.Request, name string, in client.GuestInvite) (identity.GuestTerms, error) {
+	term := time.Duration(in.ForSeconds) * time.Second
+	if term <= 0 || term > MaxGuestTerm {
+		return identity.GuestTerms{}, errors.New("a guest's term must be above zero and at most 30 days")
+	}
+	if len(in.Ask) == 0 {
+		return identity.GuestTerms{}, errors.New("a guest must be listed for at least one teammate")
+	}
+	for _, to := range in.Ask {
+		if err := s.guestTarget(r, name, to); err != nil {
+			return identity.GuestTerms{}, err
+		}
+	}
+	return identity.GuestTerms{Until: s.cfg.Now().Add(term).UTC().Truncate(time.Millisecond), Asks: in.Ask, NoHold: in.NoHold}, nil
+}
+
+// connectGuest answers a connect that carries a guest's limits. The caller
+// has checked admin rights and that a gateway runs. A gateway guest is always
+// held: anyone holding its token is on the open internet, with no tailnet
+// account behind them, so --no-hold is not offered and a relay refuses it.
+func (s *Server) connectGuest(w http.ResponseWriter, r *http.Request, name string, replace bool, in client.GuestInvite) {
+	conn, ok := s.conn.(GuestConnector)
+	if !ok {
+		writeErr(w, http.StatusNotFound, errors.New("this gateway does not take guests"))
+		return
+	}
+	if replace || in.NoHold {
+		writeErr(w, http.StatusBadRequest, errors.New("a gateway guest takes neither --replace nor --no-hold"))
+		return
+	}
+	terms, err := s.guestTerms(r, name, in)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	code, base, err := conn.ConnectGuest(r.Context(), name, terms)
+	if err != nil {
+		writeErr(w, statusFor(err), err)
+		return
+	}
+	cards := make([]string, 0, len(in.Ask))
+	for _, to := range in.Ask {
+		cards = append(cards, base+"/a2a/"+to+"/.well-known/agent-card.json")
+	}
+	s.record(r.Context(), "guest_connected", "", "", name, store.DetailJSON(map[string]any{"guest_asks": in.Ask, "guest_until": terms.Until}))
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "code": code, "expires_in": "10m0s", "cards": cards, "unpublished": conn.Unpublished(in.Ask),
+		"guest_until": terms.Until, "guest_asks": in.Ask, "hold_alerts": s.holdAlerts(r)})
 }
 
 // guestTarget says why guest name may not list to, nil when it may: to must be

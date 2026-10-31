@@ -408,7 +408,7 @@ A wrapper in front of every route answers 403 with `guests may not use this rout
 | `GET /v1/requests/{id}` | Its own asks only, as for anyone. |
 | `POST /v1/requests/{id}/claim` | Relay notices only; 403 for anything else. |
 | `POST /v1/requests/{id}/answer` | As for anyone. |
-| `POST /v1/requests/{id}/cancel` | As for anyone. |
+| `POST /v1/requests/{id}/cancel` | As for anyone, except that a gateway guest gets 409 on a request that was claimed before or whose question was answered. |
 | `GET /v1/agents` | Its listed teammates, with `name`, `online`, `wake` (always `none`), `kind` and `good_at` only. |
 | `GET /v1/whoami` | `name`, `kind`, `guest_until`, and never `relay_key` or `relay_urls`. |
 | `GET /v1/hello` | As for anyone. |
@@ -433,6 +433,56 @@ What a guest wrote, in a send or in an answer, goes between delimiters with a ra
 A marked request that is not `guest_approved` is held after the rate check and before `approval.json` is read, so no gate entry can lift it, and it takes its hold TTL and notify target from the file. `no_hold` lifts that default hold for the guest's own asks and is audited on `guest_invited`; `approval.json` and the kind holds still apply, and what a teammate sends from an unapproved guest ask is held anyway. Approving sets `guest_approved`, and a request sent from approved work is `guest_approved` too and passes this hold. A guest's answer to a needs_input question clears it on that request. A follow-on never inherits it. Failover never moves a marked request. `GET /v1/admin/held` shows a marked request's whole body, not a preview.
 
 `from_guest` and `guest_approved` are optional, also on the entries of the held-claims header, and an older client ignores them, which the body line is there for.
+
+## A2A
+
+`docs/a2a.md` is the owner's guide; this is the wire. The gateway serves A2A 1.0 over JSON-RPC, on the public side only, and adds no `/v1` route. With no published teammate, these routes answer 404:
+
+- `GET /.well-known/agent-card.json`: a card listing each published teammate as a skill, and its endpoint as an interface.
+- `GET /a2a/{teammate}/.well-known/agent-card.json`: that teammate's card. Cards need no token and carry `Cache-Control: public, max-age=300`.
+- `POST /a2a/{teammate}`: the JSON-RPC endpoint. It needs a gateway bearer token and the `A2A-Version` header.
+
+`a2a.json` in the relay's state directory lists who is published. Mode 0600, a regular file, read on every call:
+
+```json
+{"teammates": [{"name": "muse", "description": "Writes and edits. Answers can take a while."}]}
+```
+
+The order of checks on the endpoint is: published (404), token (401 with the usual `WWW-Authenticate`), caller is a guest (403 otherwise, and 403 past its term), JSON-RPC envelope, then `A2A-Version`. An empty header means 0.3 and answers `-32009`, as does anything other than 1.0 or 1.0.x. Anything after the 403 is HTTP 200 with a JSON-RPC body.
+
+| Method | Maps to | Result |
+|---|---|---|
+| `SendMessage` | `POST /v1/send` from the guest, or `POST /v1/requests/{id}/answer` when `message.taskId` names a task in needs_input | `{"task": Task}` |
+| `GetTask` | `GET /v1/requests/{id}` | `Task` |
+| `CancelTask` | `POST /v1/requests/{id}/cancel`, only for a task in `TASK_STATE_SUBMITTED` | `Task` |
+
+The task id is the request id, and `contextId` is the same id. A new message's `contextId` is ignored, since asks share no conversation; on a continuation it must match the task or the call answers `-32602`. `configuration.returnImmediately` returns at once. Otherwise `SendMessage` waits at most 25 seconds and returns the state so far, so a client must be ready to poll. A held ask returns at once. Only `text` parts are read; message and request `metadata`, `referenceTaskIds` and `historyLength` are ignored and never reach the relay, and `acceptedOutputModes` is not checked.
+
+| Request status | Task state |
+|---|---|
+| `held`, `queued` | `TASK_STATE_SUBMITTED` |
+| `delivered`, `claimed` | `TASK_STATE_WORKING` |
+| `needs_input` | `TASK_STATE_INPUT_REQUIRED`, the question in `status.message` |
+| `answered` | `TASK_STATE_COMPLETED`, the reply in the artifact `reply` |
+| `failed`, `expired` | `TASK_STATE_FAILED`, any reply in `status.message` |
+| `declined` | `TASK_STATE_REJECTED`, any reply in `status.message` |
+| `cancelled` | `TASK_STATE_CANCELED` |
+
+Reply attachments are not carried, and neither are progress or relay notes.
+
+| Code | When |
+|---|---|
+| `-32001` | The id is unknown, is another caller's, or went to another teammate |
+| `-32002` | `CancelTask` on a task past `TASK_STATE_SUBMITTED` |
+| `-32003` | `configuration.taskPushNotificationConfig` was set |
+| `-32004` | Another A2A method, a message to a task not in needs_input, or the relay refused the guest, such as a teammate it is not listed for |
+| `-32005` | A part with `raw`, `url` or `data` |
+| `-32009` | `A2A-Version` is not 1.0 |
+| `-32600`, `-32601`, `-32602`, `-32603`, `-32700` | As in JSON-RPC. A call with no `id` is `-32600`, and so is a batch |
+
+`POST /v1/admin/connect` takes an optional `guest` object, the same shape as on an invite: `{"name": "pal", "guest": {"ask": ["muse"], "for_seconds": 2592000}}`. It binds a virtual guest and answers `code`, `cards`, `unpublished` (listed teammates `a2a.json` does not publish), `guest_until`, `guest_asks` and `hold_alerts`, and audits `guest_connected`. It is new-only: a taken name answers 409, even a guest's. `replace` and `no_hold` answer 400, and so does any list or term a guest invite would refuse. `--admin-login` is not needed, because a virtual guest has no machine name to pass off as an admin device. The relay advertises `"gateway_guests": true` in `GET /v1/capabilities`. The client checks it first and then checks that `guest_until` came back, because a relay without it would ignore the field and bind a full teammate.
+
+A gateway guest's token answers 403 on `/mcp`.
 
 ## Agent roster
 

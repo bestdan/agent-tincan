@@ -576,8 +576,11 @@ func runRelay(ctx context.Context, f relayFlags) error {
 		if err != nil {
 			return err
 		}
-		srv.SetConnector(gateway.Connector{Dir: dir, OAuth: oauth, Base: base})
-		gw := client.Configure(&http.Server{Handler: gateway.New(base, oauth, srv.Handler(), Version).Handler()}, client.RelayAPI)
+		a2aFile := filepath.Join(f.stateDir, "a2a.json")
+		srv.SetConnector(gateway.Connector{Dir: dir, OAuth: oauth, Base: base, A2AFile: a2aFile})
+		pub := gateway.New(base, oauth, srv.Handler(), Version)
+		pub.SetA2AFile(a2aFile)
+		gw := client.Configure(&http.Server{Handler: pub.Handler()}, client.RelayAPI)
 		go func() { errc <- gw.Serve(gln) }()
 		servers = append(servers, gw)
 		log.Printf("chatgpt gateway serving at %s/mcp", base)

@@ -1388,6 +1388,19 @@ func (s *Store) replyFor(ctx context.Context, id string) (*envelope.Reply, error
 
 // Cancel lets the sender withdraw a request the target has not claimed.
 func (s *Store) Cancel(ctx context.Context, id, agent string) error {
+	return s.cancel(ctx, id, agent, "")
+}
+
+// CancelUntaken is Cancel for a gateway guest. A request back in the queue
+// after a teammate claimed it, or after its question was answered, is not that
+// guest's to withdraw: a claim is what marks what the teammate sends, and
+// cancelling here would stop that claim from ever coming back while the
+// teammate may still be acting on what it read.
+func (s *Store) CancelUntaken(ctx context.Context, id, agent string) error {
+	return s.cancel(ctx, id, agent, ` AND resumed = 0 AND claim_lapsed = 0`)
+}
+
+func (s *Store) cancel(ctx context.Context, id, agent, cond string) error {
 	req, _, err := s.lookup(ctx, id)
 	if err != nil {
 		return err
@@ -1395,7 +1408,7 @@ func (s *Store) Cancel(ctx context.Context, id, agent string) error {
 	if req.From != agent {
 		return ErrForbidden
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, updated_at = ? WHERE id = ? AND status IN (?, ?, ?)`,
+	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, updated_at = ? WHERE id = ? AND status IN (?, ?, ?)`+cond,
 		string(envelope.StatusCancelled), s.now().UnixMilli(), id, string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusHeld))
 	if err != nil {
 		return err
