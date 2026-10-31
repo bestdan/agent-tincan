@@ -45,7 +45,7 @@ func FormatRequest(req envelope.Request) string {
 	if req.Resumed {
 		b.WriteString("Resumed with clarification from the asker.\n")
 	}
-	b.WriteString(formatExchanges(req.Exchanges))
+	b.WriteString(FormatExchanges(req.Exchanges))
 	return b.String()
 }
 
@@ -61,7 +61,7 @@ func formatResult(r Result) string {
 	case r.Status == envelope.StatusNeedsInput:
 		return FormatReply(r)
 	case r.Reply != nil:
-		return fmt.Sprintf("%s replied (%s):\n%s\n", r.Reply.From, r.Reply.Status, r.Reply.Body) + FormatAttachments(r.Reply.Attachments) + formatExchanges(r.Exchanges)
+		return fmt.Sprintf("%s replied (%s):\n%s\n", r.Reply.From, r.Reply.Status, r.Reply.Body) + FormatAttachments(r.Reply.Attachments) + FormatExchanges(r.Exchanges)
 	case r.Status == envelope.StatusClaimed && r.Progress != nil:
 		return fmt.Sprintf("Request %s: %s. Check later with get_reply or `tincan get %s`.\n", r.Request.ID, FormatProgress(r.Progress), r.Request.ID)
 	case r.Done():
@@ -369,7 +369,7 @@ func FormatReply(r Result) string {
 	if r.Status == envelope.StatusNeedsInput && r.Reply != nil {
 		fmt.Fprintf(&b, "%s needs more information for your request %s: %s\nYou asked: %s\nAnswer with answer (or `tincan answer %s \"...\"`).\n", r.Request.To, r.Request.ID, r.Reply.Body, truncate(r.Request.Body, 300), r.Request.ID)
 		b.WriteString(formatParent(r.Parent))
-		b.WriteString(formatExchanges(r.Exchanges))
+		b.WriteString(FormatExchanges(r.Exchanges))
 		return b.String()
 	}
 	from, status, body := r.Request.To, r.Status, ""
@@ -385,11 +385,13 @@ func FormatReply(r Result) string {
 	b.WriteString(body)
 	b.WriteString("\n---\n")
 	b.WriteString(FormatAttachments(atts))
-	b.WriteString(formatExchanges(r.Exchanges))
+	b.WriteString(FormatExchanges(r.Exchanges))
 	return b.String()
 }
 
-func formatExchanges(exchanges []envelope.Exchange) string {
+// FormatExchanges renders a request's clarification rounds, empty when there
+// are none.
+func FormatExchanges(exchanges []envelope.Exchange) string {
 	var b strings.Builder
 	for i, ex := range exchanges {
 		fmt.Fprintf(&b, "Clarification %d:\nQuestion: %s\n", i+1, ex.Question)

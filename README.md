@@ -487,7 +487,7 @@ For scripts, `tincan ask`, `get` and `inbox` take `--json` and print one JSON do
 
 Single-target text output and exit codes are unchanged.
 
-Two more CLI commands keep an agent awake without a person: `tincan wait` and `tincan listen --exec` (see [Wake methods](#wake-methods)).
+Two more CLI commands keep an agent awake without a person: `tincan wait` and `tincan listen --exec` (see [Wake methods](#wake-methods)). `tincan listen --exec --per-request` starts one fresh process per ask instead (see [One process per request](#one-process-per-request)).
 
 A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a teammate's tincan path (see [Reachability checks](#reachability-checks)), and the owner's `tincan held`, `tincan approve <id>` and `tincan deny <id>` handle requests held for approval (see [Owner approval](#owner-approval)). Agents convene a council with `ask`; the owner's `tincan council "question"` and `tincan council leaderboard` are CLI only (see [Council](#council)), and so is `tincan pass` (see [Pass the conversation](#pass-the-conversation)).
 
@@ -818,6 +818,26 @@ Notes that apply to every method:
 - A webhook or email agent may list a `fallback`: further `webhook` or `email` targets, in order, each with the same fields as a primary. When a follow-up finds the agent still silent, it goes out on the next path instead of repeating one whose 2xx never started a run, cycling back to the primary after the last. A poll resets to the primary, and all paths share `max_per_hour`. The wake result names the path, for example `webhook ok (fallback 1: email)`. See [the Grok Bot adapter](docs/adapters/grokbot.md#when-the-webhook-says-ok-but-nothing-runs) for an example.
 
 A wake can be delivered and still start nothing, for example when the receiving app's own job fails. HTTP success on a wake POST means the platform accepted the nudge, not that the agent ran. For webhook and email agents the relay remembers the last wake it sent and whether the send worked (`ok`, or a short reason naming the host, such as `hooks.example returned 502 Bad Gateway`, never the wake URL or its credentials). If the agent has not checked in (polled; other calls do not count) within `--wake-grace` of that wake (default 10m, counted from the relay's start after a restart), or the send failed, it is unanswered: `tincan agents`, `list_agents` and `tincan top` mark it, an ask to it says "grokbot was woken at 16:40 and has not checked in yet; the request is queued.", and `tincan doctor` on an admin device warns with the wake result. The agent's next poll clears it. While work stays queued and the agent has not polled, the relay keeps sending the same webhook or email (or the next fallback path, when there are any) on that `--wake-grace` interval, or every `--urgent-wake-grace` (default 2m) while an urgent request to it is queued, inside `max_per_hour` (default 12). A later successful send does not move the unanswered time. The relay log and the `woke` audit event also carry a short, sanitized summary of a webhook's 2xx response body, so an error the platform answered with a 2xx shows there. Once a request has waited out a full grace (the urgent one for an urgent request) with the agent still silent, the relay tells its asker once: a notice from `relay` in `check_inbox` (which wakes a webhook or email asker) and the same note on the request in `get_reply`, saying "grokbot was woken at 16:40 UTC and has not checked in (webhook ok). The request is still queued. If it can't wait, cancel it and ask a teammate who is online and good at this: muse, scout." The request keeps its status; the relay never cancels or reroutes it. The owner still has to repair a dead receiver.
+
+### One process per request
+
+`tincan listen --exec <command> --per-request` takes each ask itself and starts one fresh process for it, instead of nudging one process to drain the inbox. It is off unless you pass the flag, and it needs no relay change.
+
+```bash
+tincan listen --exec ~/bin/worker.sh --per-request --worktree ~/src/myrepo --max-workers 2 --timeout 30m
+```
+
+- Each process runs through `sh -c`, unattended, as the listening agent. It gets the request body on stdin (followed by a list of any attachments and clarification rounds), and `TINCAN_REQUEST_ID`, `TINCAN_FROM`, `TINCAN_SESSION` and an absolute `TINCAN_CONFIG` in its environment. It replies with `tincan reply "$TINCAN_REQUEST_ID" ...`.
+- A worker works on its own request and leaves the inbox alone. `tincan inbox` and the `check_inbox` of a `tincan mcp` take every waiting ask for this agent, which breaks `--max-workers` and can start a second process on an ask. The instructions `tincan mcp` gives a model tell it to check the inbox first, and its notice of held requests names the other workers' requests too, so do not give a worker a `tincan mcp`.
+- `--max-workers` (default 2) caps how many run at once. The rest stay queued, with no lease running. `--timeout` (default 30m) kills a process and its process group. Anything a process leaves running in its group is killed when it exits.
+- A process that exits, or is killed, without replying fails the request, and the failed reply says why, with the exit code. A reply from the process is left alone. A process that replies `needs_input` should exit: the asker's answer starts a fresh process with the exchange on stdin.
+- The listener renews the claim while the process runs, so long work never looks abandoned.
+- With `--worktree <repo>`, each process runs in a new detached git worktree of the repository's current `HEAD`, under `worktrees/<agent>` beside the agent's config file. It is removed afterwards when clean. One with uncommitted changes or new commits is kept and the listener logs its path, so clear those with `git worktree remove`. Files ignored by git do not count as changes.
+- Only asks start a process. Pings are answered by the listener, and notifies and replies stay for the agent's `check_inbox` or `tincan inbox`, which nothing here reads. A peek names 50 waiting requests at most, so 50 unread notifies keep newer asks out of sight until they are read.
+- Run it as the only thing taking this agent's requests. A second surface can claim the same ask in the moment before the listener does.
+- It does not work with `--once`, and it refuses to start on platforms without a unix shell.
+
+See the [trust model](docs/trust-model.md#per-request-workers) for what this mode gives a teammate.
 
 ## Platform guide
 
