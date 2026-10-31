@@ -72,6 +72,7 @@ func settle() { time.Sleep(300 * time.Millisecond) }
 // One teammate request starts one turn on the machine, however many
 // windows are idle.
 func TestSocketWakeOneWindowPerRequest(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -95,6 +96,7 @@ func TestSocketWakeOneWindowPerRequest(t *testing.T) {
 
 // A reply to an ask a window sent goes to that window only.
 func TestSocketWakeOwnReplyToAskingWindow(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -126,6 +128,7 @@ func TestSocketWakeOwnReplyToAskingWindow(t *testing.T) {
 // A reply to a request sent with no session is shown to every window, and
 // still wakes only one.
 func TestSocketWakeSessionlessReplyWakesOne(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -149,6 +152,7 @@ func TestSocketWakeSessionlessReplyWakesOne(t *testing.T) {
 
 // A busy window never holds a request back from an idle one.
 func TestSocketWakeBusyWindowDoesNotBlockIdle(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -166,6 +170,7 @@ func TestSocketWakeBusyWindowDoesNotBlockIdle(t *testing.T) {
 // A request is delivered once: the window that pushed it may go away, and
 // nobody announces it again, even after reannounceAfter.
 func TestSocketWakeDeliversOnce(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -191,6 +196,7 @@ func TestSocketWakeDeliversOnce(t *testing.T) {
 // the window's own reply goes first, and the request waits for the next
 // recheck rather than landing in a session that just started a turn.
 func TestSocketWakeOwnReplyWithoutLock(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, 50*time.Millisecond)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -222,6 +228,7 @@ func TestSocketWakeOwnReplyWithoutLock(t *testing.T) {
 // Upgrade notices never go through the socket: each socket message spends
 // a turn, and the notice reaches the agent on its next tool call anyway.
 func TestSocketWakeSkipsUpgradeNotice(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	old := client.Version
 	client.Version = "0.5.4"
 	t.Cleanup(func() { client.Version = old })
@@ -243,6 +250,7 @@ func TestSocketWakeSkipsUpgradeNotice(t *testing.T) {
 // polling until the socket checks out again. Its peeks advertise socket
 // wake and the keepalive after them does not.
 func TestSocketWakeStopsPeekingWhenSocketFails(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 10*time.Millisecond, time.Hour)
 	var polls, whoami atomic.Int32
 	var peekFeatures, keepFeatures atomic.Value
@@ -340,6 +348,7 @@ func TestClaudeSocketIdleIgnoresStatusAge(t *testing.T) {
 // it is listed, and a change in the count drops it at once, so such a
 // request is not kept from its turn for good.
 func TestSocketWakeCountOnlyRelayAnnouncesAgain(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 10*time.Millisecond, time.Hour)
 	old := socketRecordKeep
 	socketRecordKeep = 150 * time.Millisecond
@@ -406,6 +415,7 @@ func TestWakeSocketOnByDefault(t *testing.T) {
 // Once a fresh check of the socket passes, socketWake pushes again and the
 // relay hears socket wake again.
 func TestSocketWakeResumesAfterReverify(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 10*time.Millisecond, time.Hour)
 	var features sync.Map
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -443,6 +453,7 @@ func TestSocketWakeResumesAfterReverify(t *testing.T) {
 // request, but it is new work: it gets its own turn once it has left the
 // queue in between.
 func TestSocketWakeAnnouncesRequeuedRequest(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -474,6 +485,7 @@ func TestSocketWakeAnnouncesRequeuedRequest(t *testing.T) {
 
 // Each answer to an ask is its own reply generation and gets its own turn.
 func TestSocketWakeAnnouncesNewReplyGeneration(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	w := newFakeWindow()
@@ -510,6 +522,7 @@ func TestSocketWakeAnnouncesNewReplyGeneration(t *testing.T) {
 // A delivery the record cannot save would be sent again on the next peek,
 // so it counts as a failed write and ends socket wake after the limit.
 func TestSocketWakeUnsavedRecordCountsAsFailure(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 10*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	dir := t.TempDir()
@@ -538,6 +551,7 @@ func TestSocketWakeUnsavedRecordCountsAsFailure(t *testing.T) {
 // The own-reply record outlives one pushSocket run, so a socket that
 // recovers does not announce a reply it already delivered.
 func TestSocketWakeOwnReplySurvivesRestart(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	muse := museWindow(t, m, "mcp-a")
@@ -565,6 +579,7 @@ func TestSocketWakeOwnReplySurvivesRestart(t *testing.T) {
 // A peek taken before another window saved its delivery must not delete
 // that delivery: the older peek simply had not seen the request yet.
 func TestSocketWakeOlderPeekKeepsNewerDelivery(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
 	peekedAt := time.Now()
 	saved := peekedAt.Add(time.Second)
@@ -594,6 +609,7 @@ func TestSocketWakeOlderPeekKeepsNewerDelivery(t *testing.T) {
 // one reply starts one turn on the machine. (Seen live against an older
 // relay, where both windows woke for one reply.)
 func TestSocketWakeOwnReplyOnceAcrossWindowsOnOlderRelay(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, time.Hour)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -631,6 +647,7 @@ func TestSocketWakeOwnReplyOnceAcrossWindowsOnOlderRelay(t *testing.T) {
 // written) means nothing can be delivered, so it counts as a failed write
 // and ends socket wake instead of advertising a wake that never comes.
 func TestSocketWakeLockErrorCountsAsFailure(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 10*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	blocker := filepath.Join(t.TempDir(), "file")

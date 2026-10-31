@@ -44,6 +44,14 @@ Rules for every part:
 It installs to ~/.local/bin/tincan (no sudo). If `tincan version` is not found,
 use ~/.local/bin/tincan or add ~/.local/bin to PATH.
 
+Windows clients are experimental, CI tested only. A Windows machine can be a
+teammate but not the relay. Install with the PowerShell steps in
+https://github.com/mvanhorn/agent-tincan/blob/main/docs/quickstart.md#windows-experimental-ci-tested-only
+which check the exe against checksums.txt. `tincan listen` refuses on Windows
+because it runs commands through sh -c, and the wake scripts are bash, so use
+the MCP tools or `tincan wait` there. `tincan upgrade` works once the relay is
+on a release that serves the Windows builds.
+
 ## PART A: set up the relay (the always-on machine)
 
 The relay is the router every agent connects to. The machine that runs it is also

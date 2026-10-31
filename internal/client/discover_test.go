@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"sync"
@@ -835,6 +836,9 @@ func waitJoined(t *testing.T, r *Relay, n int) {
 // unixSocket listens on a short-path unix socket and returns its path.
 func unixSocket(t *testing.T, dir, name string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("tailscaled socket discovery is for Linux sandboxes; Windows talks to Tailscale over its LocalAPI pipe")
+	}
 	p := filepath.Join(dir, name)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
@@ -1070,6 +1074,9 @@ func TestFindRelayNetmapDoesNotWaitOnStaleAdvertised(t *testing.T) {
 // connection, as a tailscaled restart would.
 func fakeLocalAPI(t *testing.T, sock string) (conns *atomic.Int32, stop func()) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("tailscaled socket discovery is for Linux sandboxes; Windows talks to Tailscale over its LocalAPI pipe")
+	}
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)

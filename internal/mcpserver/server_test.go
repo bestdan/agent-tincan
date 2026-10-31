@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -613,7 +614,7 @@ func TestNonImageSavedByIDInsideDir(t *testing.T) {
 		t.Fatalf("non-images came back as images: %d", len(imgs))
 	}
 	st, err := os.Stat(dir)
-	if err != nil || st.Mode().Perm() != 0o700 {
+	if err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o700) {
 		t.Fatalf("dir = %v, %v", st, err)
 	}
 	want := map[string]bool{ids[0] + ".txt": true, ids[1] + ".txt": true, ids[2] + ".txt": true, ids[3] + ".pdf": true}
@@ -626,7 +627,7 @@ func TestNonImageSavedByIDInsideDir(t *testing.T) {
 			t.Fatalf("unexpected file %q", e.Name())
 		}
 		info, _ := e.Info()
-		if info.Mode().Perm() != 0o600 {
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 			t.Fatalf("%s mode = %v", e.Name(), info.Mode().Perm())
 		}
 		if !strings.Contains(out, filepath.Join(dir, e.Name())) {
@@ -739,6 +740,8 @@ func emptyDirs(t *testing.T) func() {
 	t.Helper()
 	home, cfg, wd := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows reads these two instead
+	t.Setenv("AppData", cfg)
 	t.Setenv("XDG_CONFIG_HOME", cfg)
 	t.Setenv("TINCAN_CONFIG", filepath.Join(cfg, "tincan", "config.json"))
 	t.Chdir(wd)

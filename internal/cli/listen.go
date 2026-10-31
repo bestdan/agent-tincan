@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -26,13 +27,16 @@ func listenCmd() *cobra.Command {
 this agent's own requests, are waiting. Nothing is taken, so the agent picks
 them up itself with check_inbox or "tincan inbox". The command gets
 TINCAN_WAITING (requests plus unseen replies) in its environment and runs
-through "sh -c". A new relay release also nudges the command, with its version
+through "sh -c", so listen refuses on Windows. A new relay release also nudges the command, with its version
 in TINCAN_UPGRADE_AVAILABLE (empty on other nudges), even if TINCAN_WAITING is zero.
 
 Use this for agents whose runtime stays up and can be nudged by a command,
 for example opening a Claude Code session in cmux. For agents that get a new
 turn when a background command exits (Muse), use "tincan wait" instead.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := needsShell(runtime.GOOS, "tincan listen"); err != nil {
+				return err
+			}
 			if execCmd == "" {
 				return errors.New("--exec is required")
 			}
@@ -46,6 +50,15 @@ turn when a background command exits (Muse), use "tincan wait" instead.`,
 	cmd.Flags().StringVar(&execCmd, "exec", "", "command to run when requests or replies are waiting")
 	cmd.Flags().BoolVar(&once, "once", false, "exit after the first nudge")
 	return cmd
+}
+
+// needsShell refuses a command that runs its work through sh -c on a platform
+// that has no sh.
+func needsShell(goos, command string) error {
+	if goos == "windows" {
+		return fmt.Errorf("%s runs commands with sh -c, so it does not work on Windows; use tincan wait or the MCP tools there", command)
+	}
+	return nil
 }
 
 // listen's timing and log. Tests override them.

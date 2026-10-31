@@ -408,7 +408,7 @@ Put the `tincan` binary on the relay host and on every agent's machine (and on a
 curl -fsSL https://agenttincan.com/install.sh | sh
 ```
 
-The installer picks the build for the machine (macOS on Apple silicon or Intel, Linux on x86-64 or ARM64), downloads the newest stable release from GitHub, checks it against the release's `checksums.txt`, and installs it to `~/.local/bin/tincan` without `sudo`. Set `TINCAN_INSTALL_DIR` to install elsewhere, or `TINCAN_VERSION=v0.5.0` to pin a release. Prereleases such as `v0.6.0-rc1` install only when `TINCAN_VERSION` names them. Or download manually from the [releases page](https://github.com/mvanhorn/agent-tincan/releases): `tincan_<os>_<arch>` plus `checksums.txt`. There is no Windows build; build from source with `make build`.
+The installer picks the build for the machine (macOS on Apple silicon or Intel, Linux on x86-64 or ARM64), downloads the newest stable release from GitHub, checks it against the release's `checksums.txt`, and installs it to `~/.local/bin/tincan` without `sudo`. Set `TINCAN_INSTALL_DIR` to install elsewhere, or `TINCAN_VERSION=v0.5.0` to pin a release. Prereleases such as `v0.6.0-rc1` install only when `TINCAN_VERSION` names them. Or download manually from the [releases page](https://github.com/mvanhorn/agent-tincan/releases): `tincan_<os>_<arch>` plus `checksums.txt`. Windows client builds are experimental, CI tested only; the PowerShell install steps and what differs there are in [docs/quickstart.md](docs/quickstart.md#windows-experimental-ci-tested-only). There is no Windows relay. For other platforms, build from source with `make build`.
 
 Step by step, including the relay and your first two agents: [docs/quickstart.md](docs/quickstart.md).
 
@@ -663,7 +663,7 @@ tincan upgrade --check                                          # agent: current
 tincan upgrade                                                  # agent: download, verify, swap
 ```
 
-The dist directory holds the raw binaries named `tincan_<os>_<arch>` (`tincan_linux_amd64`, `tincan_linux_arm64`, `tincan_darwin_arm64`, `tincan_darwin_amd64`), the release's `checksums.txt`, and a `VERSION` file. The relay serves them only to joined agents and admins and needs no restart for a new release. `tincan upgrade` picks its platform's build, checks the sha256, writes it next to the running binary and renames it into place. Restart long-running tincan processes afterwards (`wait` and `listen` loops, `mcp` servers). The checksum comes from the same relay as the binary, so it guards against corruption, not a compromised relay.
+The dist directory holds the raw binaries named `tincan_<os>_<arch>` (`tincan_linux_amd64`, `tincan_linux_arm64`, `tincan_darwin_arm64`, `tincan_darwin_amd64`, and `tincan_windows_amd64.exe` and `tincan_windows_arm64.exe` for experimental Windows clients, CI tested only), the release's `checksums.txt`, and a `VERSION` file. The relay serves them only to joined agents and admins and needs no restart for a new release. `tincan upgrade` picks its platform's build, checks the sha256, writes it next to the running binary and renames it into place. Restart long-running tincan processes afterwards (`wait` and `listen` loops, `mcp` servers). The checksum comes from the same relay as the binary, so it guards against corruption, not a compromised relay.
 
 On macOS, `tincan upgrade` then runs the new binary's `tincan services refresh` (below), so tincan's services restart on the new build.
 
@@ -1495,9 +1495,9 @@ make dist             # every release asset in dist/ (see below)
 make release VERSION=x.y.z NOTES=<file>   # the whole release (see below)
 ```
 
-`make build` builds one binary, for the machine you run it on. CI runs `go vet` and `go test -race` on Linux and macOS, and checks the static builds for linux/amd64, linux/arm64, darwin/arm64 and darwin/amd64.
+`make build` builds one binary, for the machine you run it on. CI runs `go vet` and `go test -race` on Linux and macOS, and checks the static builds for linux/amd64, linux/arm64, darwin/arm64, darwin/amd64, windows/amd64 and windows/arm64. A Windows job runs `go vet` and `go test` on the client packages and a smoke test of the built exe against a test relay. That job is the only test of the Windows client, which is experimental, CI tested only.
 
-Releases are on the GitHub repo's release page. Each carries `tincan_darwin_arm64`, `tincan_darwin_amd64` (Intel Mac), `tincan_linux_amd64`, `tincan_linux_arm64`, `checksums.txt` (sha256 of the four binaries and extension zip) and `tincan-history-extension.zip`. The binaries and `checksums.txt` are what the relay's `--dist` directory takes (add a `VERSION` file).
+Releases are on the GitHub repo's release page. Each carries `tincan_darwin_arm64`, `tincan_darwin_amd64` (Intel Mac), `tincan_linux_amd64`, `tincan_linux_arm64`, `tincan_windows_amd64.exe`, `tincan_windows_arm64.exe` (experimental, CI tested only), `checksums.txt` (sha256 of the six binaries and extension zip) and `tincan-history-extension.zip`. The binaries and `checksums.txt` are what the relay's `--dist` directory takes (add a `VERSION` file).
 
 Releases are cut on the maintainer's Mac; CI does not publish them. One command does the whole release from a clean checkout of `main`:
 
