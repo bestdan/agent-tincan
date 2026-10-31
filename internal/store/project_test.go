@@ -107,6 +107,51 @@ func TestLapsedLeaseKeepsProjectClock(t *testing.T) {
 	}
 }
 
+// rev changes on each return to the queue, so a wake can tell a return from
+// the delivery it already announced, whichever way the request came back.
+func TestPendingRevChangesOnReturn(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	rev := func() int64 {
+		t.Helper()
+		list, err := s.PendingRequestsFor(ctx, "handler", QueueScope{}, 10)
+		if err != nil || len(list) != 1 || list[0].Rev == 0 {
+			t.Fatalf("pending = %+v, %v", list, err)
+		}
+		return list[0].Rev
+	}
+	req := scopedAsk(t, s, "")
+	first := rev()
+	if again := rev(); again != first {
+		t.Fatalf("rev moved without a return: %d, %d", first, again)
+	}
+	if _, err := s.Claim(ctx, req.ID, "handler", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(time.Second)
+	if _, err := s.Reply(ctx, req.ID, "handler", envelope.Reply{Status: envelope.StatusNeedsInput, Body: "which branch?"}); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(time.Second)
+	if _, err := s.Answer(ctx, req.ID, "asker", "main"); err != nil {
+		t.Fatal(err)
+	}
+	answered := rev()
+	if answered == first {
+		t.Fatalf("rev unchanged after an answer: %d", answered)
+	}
+	if _, err := s.Claim(ctx, req.ID, "handler", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(2 * time.Minute)
+	if _, err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if lapsed := rev(); lapsed == answered {
+		t.Fatalf("rev unchanged after a lapsed lease: %d", lapsed)
+	}
+}
+
 // A move drops the label: it named a session of the old target.
 func TestMoveDropsProject(t *testing.T) {
 	s, _ := open(t, ":memory:")

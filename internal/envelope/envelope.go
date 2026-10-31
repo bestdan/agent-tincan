@@ -286,6 +286,10 @@ type Pending struct {
 	Urgent bool   `json:"urgent,omitempty"`
 	ID     string `json:"id"`
 	From   string `json:"from"`
+	// Rev changes each time the request returns to the queue, so a client
+	// can tell one return from the last without seeing the whole queue. It
+	// is opaque, and a relay that predates it leaves it zero.
+	Rev int64 `json:"rev,omitempty"`
 }
 
 // Held is a claimed ask the agent has not replied to, as the relay reports
