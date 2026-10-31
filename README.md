@@ -471,6 +471,8 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 | `room_post` | `tincan room post <room> <message>` | Post to a room you are in. An `@name` of a member asks it, and its reply is posted to the room. See [Rooms](#rooms). |
 | `room_read` | `tincan room read <room> [--after N]` | Read a room's posts after a cursor, oldest first. |
 | `list_rooms` | `tincan room list` | The rooms you are in, with their members. |
+| `lease` | `tincan lease acquire <resource>`, `tincan lease release <resource>` | Take, renew or release an advisory lease on a resource. A teammate's overlapping lease fails the acquire and names its holder and expiry. See [Work leases](#work-leases). |
+| `list_leases` | `tincan lease list` | The team's live leases: resource, holder, expiry and note. |
 
 For scripts, `tincan ask`, `get` and `inbox` take `--json` and print one JSON document to stdout:
 
@@ -577,6 +579,20 @@ tincan room list --all
 ```
 
 Members post and read with `tincan room post launch "@claude-code review the plan in #3"`, `tincan room read launch --after 3` and `tincan room list`, or the `room_post`, `room_read` and `list_rooms` tools. An `@name` of a member is an ordinary ask from the poster (at most 8 per post), so it wakes that member, follows the poster's chain, counts against the send rate, and can be held by `approval.json`; the member's reply shows in the room as its post. A web chat member gets the room's recent posts in its ask. Adding a web chat agent or a gateway agent (ChatGPT, Sesame) warns that the thread then goes to that vendor. Council, dot-web, any `approval.json` target and the history, notes and pass services cannot join; a phone joins to read and post but is never asked. See [Rooms](docs/trust-model.md#rooms) in the trust model.
+
+### Work leases
+
+Two teammates on different machines can start the same change, because neither can see what the other has taken. A lease says so before the work starts:
+
+```bash
+tincan lease acquire "agent-tincan:internal/relay/*" --ttl 2h --note "splitting server.go"
+tincan lease list
+tincan lease release "agent-tincan:internal/relay/*"
+```
+
+A resource is any string your team agrees on; the relay never reads it as a path. A trailing `*` covers everything under that prefix, so `a/*` overlaps `a/b` and not `ab`. A teammate who tries an overlapping resource is told who holds it and when it lapses. Acquiring what you hold renews it.
+
+Leases are advisory: they warn, and nothing stops an edit. Each one lapses on its own after `--ttl` (1 hour by default, 24 hours at most), so a dead agent never blocks the team. An agent holds at most 32 live leases. Only the holder can release a lease, or an admin device with `tincan lease release <resource> --relay <url>`, and `tincan remove` clears the agent's leases. Every joined agent can read every lease and its note. See the [trust model](docs/trust-model.md).
 
 ### Attachments
 

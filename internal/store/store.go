@@ -246,6 +246,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate rooms: %w", err)
 	}
+	if err := s.migrateLeases(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate leases: %w", err)
+	}
 	for {
 		more, err := s.backfillSearchBatch()
 		if err != nil {
@@ -540,6 +544,9 @@ func (s *Store) DeleteAgent(ctx context.Context, name string) (bool, error) {
 		return false, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM room_members WHERE agent = ?`, name); err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM work_leases WHERE holder = ?`, name); err != nil {
 		return false, err
 	}
 	return n > 0, tx.Commit()
