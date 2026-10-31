@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -248,6 +249,49 @@ func TestTailnetChecksRoleForTheRunningDaemon(t *testing.T) {
 	got := tailnetChecks(t.Context(), r)
 	if len(got) != 2 || got[0].Status != "ok" || !strings.Contains(got[0].Detail, "tags unknown") ||
 		got[1].Status != "warn" || !strings.Contains(got[1].Detail, "untagged") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// Through a remote proxy the relay answers for the proxy's node, so it is not
+// asked and no line takes its word.
+func TestTailnetChecksRemoteProxySkipsRole(t *testing.T) {
+	stubTailnet(t, tailnetSelf("1.104.4", false))
+	old := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		t.Errorf("unexpected relay call: %s", req.URL.Path)
+		return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"error":"no"}`)), Request: req}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = old })
+	r, err := client.NewRelayFor(client.Config{Relay: "http://tincan-relay", Proxy: "http://hatch-egress-proxy:3130"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := tailnetChecks(t.Context(), r)
+	if len(got) != 1 || got[0].Status != "ok" || !strings.Contains(got[0].Detail, "tag check skipped") {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// A userspace tailscaled's proxy on loopback is this machine's own node, so
+// the relay's answer still applies.
+func TestTailnetChecksLoopbackProxyKeepsRole(t *testing.T) {
+	stubTailnet(t, tailnetSelf("1.104.4", false))
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+		fmt.Fprint(w, `{"error":"no"}`)
+	}))
+	defer proxy.Close()
+	r, err := client.NewRelayFor(client.Config{Relay: "http://tincan-relay", Proxy: proxy.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := tailnetChecks(t.Context(), r)
+	if len(got) != 1 || got[0].Status != "warn" || !strings.Contains(got[0].Detail, "untagged") {
 		t.Fatalf("got %+v", got)
 	}
 }

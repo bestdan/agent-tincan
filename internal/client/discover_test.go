@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1319,6 +1320,101 @@ func TestTailnetSelvesMissingSocket(t *testing.T) {
 	t.Setenv("TS_SOCKET", filepath.Join(t.TempDir(), "gone.sock"))
 	if got := TailnetSelves(t.Context()); len(got) != 1 {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// linuxHost makes this a Linux host with the given default socket, running
+// tailscaleds with the given command lines.
+func linuxHost(t *testing.T, dir, def string, cmdlines ...string) {
+	t.Helper()
+	swapTailnetSources(t,
+		func() (*ipnstate.Status, error) {
+			return &ipnstate.Status{Version: "1.104.4", BackendState: "Running"}, nil
+		},
+		func() (*ipn.Prefs, error) { return &ipn.Prefs{}, nil },
+		nil)
+	goos = "linux" // swapTailnetSources puts it back
+	proc := filepath.Join(dir, "proc")
+	for i, cmd := range cmdlines {
+		pid := filepath.Join(proc, strconv.Itoa(i+1))
+		if err := os.MkdirAll(pid, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pid, "cmdline"), []byte(cmd), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldProc, oldHome, oldDef := procRoot, userHome, defaultSocket
+	procRoot, userHome = proc, func() (string, error) { return filepath.Join(dir, "nohome"), nil }
+	defaultSocket = func() string { return def }
+	t.Cleanup(func() { procRoot, userHome, defaultSocket = oldProc, oldHome, oldDef })
+}
+
+// A userspace tailscaled beside the one on the default socket reports too,
+// though the search for a moved relay stops at the default socket.
+func TestTailnetSelvesUserspaceBesideDefault(t *testing.T) {
+	dir := shortTemp(t)
+	def := unixSocket(t, dir, "default.sock")
+	user := unixSocket(t, dir, "ts/tailscaled.sock")
+	linuxHost(t, dir, def, "/usr/sbin/tailscaled\x00--tun=userspace-networking\x00--socket="+user+"\x00")
+	got := TailnetSelves(t.Context())
+	if len(got) != 2 || got[0].Socket != def || got[1].Socket != user || !got[0].Running || !got[1].Running {
+		t.Fatalf("got %+v, want %q then %q", got, def, user)
+	}
+	if socks, err := tailscaledSockets(t.Context()); err != nil || !slices.Equal(socks, []string{def}) {
+		t.Fatalf("tailscaledSockets = %q, %v; want only %q", socks, err, def)
+	}
+}
+
+// The stock service names the default socket through /run where the default
+// path says /var/run. That is one tailscaled, not a second one to count.
+func TestTailnetSelvesDefaultSocketBySecondPath(t *testing.T) {
+	dir := shortTemp(t)
+	actual := unixSocket(t, dir, "run/ts.sock")
+	if err := os.Symlink(filepath.Join(dir, "run"), filepath.Join(dir, "varrun")); err != nil {
+		t.Fatal(err)
+	}
+	def := filepath.Join(dir, "varrun", "ts.sock")
+	linuxHost(t, dir, def, "/usr/sbin/tailscaled\x00--socket="+actual+"\x00")
+	if got := TailnetSelves(t.Context()); len(got) != 1 || got[0].Socket != def {
+		t.Fatalf("got %+v, want one tailscaled on %q", got, def)
+	}
+}
+
+// A proxy on another host is what the relay sees. One on loopback, or none,
+// leaves it seeing this machine, and a proxy from the environment counts.
+func TestThroughRemoteProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name, saved, env string
+		want             bool
+	}{
+		{name: "no proxy"},
+		{name: "saved remote", saved: "http://hatch-egress-proxy:3130", want: true},
+		{name: "saved remote address", saved: "http://100.64.0.9:3130", want: true},
+		{name: "saved localhost", saved: "http://localhost:1055"},
+		{name: "saved loopback", saved: "http://127.0.0.1:1055"},
+		{name: "saved loopback v6", saved: "http://[::1]:1055"},
+		{name: "env remote", env: "http://proxy.corp:3128", want: true},
+		{name: "env loopback", env: "http://localhost:1055"},
+		{name: "saved beats env", saved: "http://localhost:1055", env: "http://proxy.corp:3128"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := envProxy
+			envProxy = func(*http.Request) (*url.URL, error) {
+				if tc.env == "" {
+					return nil, nil
+				}
+				return url.Parse(tc.env)
+			}
+			t.Cleanup(func() { envProxy = old })
+			r, err := NewRelay("http://tincan-relay", tc.saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.ThroughRemoteProxy(); got != tc.want {
+				t.Fatalf("ThroughRemoteProxy = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -555,10 +555,11 @@ func appendNew(to, add []string) []string {
 }
 
 // procRoot is where a Linux userspace tailscaled is looked for; tests
-// replace it, and userHome.
+// replace it, userHome, and defaultSocket.
 var (
-	procRoot = "/proc"
-	userHome = os.UserHomeDir
+	procRoot      = "/proc"
+	userHome      = os.UserHomeDir
+	defaultSocket = paths.DefaultTailscaledSocket
 )
 
 // tailscaledSockets are the tailscaled LocalAPI sockets to ask: TS_SOCKET
@@ -580,7 +581,7 @@ func tailscaledSockets(ctx context.Context) ([]string, error) {
 	if goos == "darwin" || goos == "windows" {
 		return []string{""}, nil
 	}
-	def := paths.DefaultTailscaledSocket()
+	def := defaultSocket()
 	_, err := os.Stat(def)
 	if err == nil {
 		return []string{def}, nil
@@ -735,7 +736,7 @@ func cliStatusNetmap(ctx context.Context) ([]string, error) {
 
 // tailscaleArgs builds a tailscale CLI command line for the tailscaled on sock.
 func tailscaleArgs(sock string, args ...string) []string {
-	if sock != "" && sock != paths.DefaultTailscaledSocket() {
+	if sock != "" && sock != defaultSocket() {
 		return append([]string{"--socket", sock}, args...)
 	}
 	return args
@@ -799,12 +800,34 @@ var tailscaleOutput = func(ctx context.Context, args ...string) ([]byte, error) 
 	return exec.CommandContext(ctx, bin, args...).Output()
 }
 
-// TailnetSelves reads this machine's Tailscale state from every tailscaled
-// the search for a moved relay would ask, LocalAPI first, then the CLI. A
-// tailscaled that neither can read is left out, so a machine without
-// Tailscale gets an empty list.
-func TailnetSelves(ctx context.Context) []TailnetSelf {
+// selfSockets are the tailscaled sockets a report on this machine reads:
+// tailscaledSockets, plus any userspace sockets beside the default one, which
+// a search for the relay does not need. The stock service passes --socket
+// with /run where the default path says /var/run, so sockets are compared by
+// file, or one daemon would count as two.
+func selfSockets(ctx context.Context) ([]string, error) {
 	socks, err := tailscaledSockets(ctx)
+	if err != nil || !slices.Equal(socks, []string{defaultSocket()}) {
+		return socks, err
+	}
+	var out []string
+	var seen []os.FileInfo
+	for _, sock := range append(socks, userspaceSockets(ctx)...) {
+		st, err := os.Stat(sock)
+		if err != nil || slices.ContainsFunc(seen, func(o os.FileInfo) bool { return os.SameFile(o, st) }) {
+			continue
+		}
+		seen = append(seen, st)
+		out = append(out, sock)
+	}
+	return out, nil
+}
+
+// TailnetSelves reads this machine's Tailscale state from every tailscaled
+// on selfSockets, LocalAPI first, then the CLI. A tailscaled that neither can
+// read is left out, so a machine without Tailscale gets an empty list.
+func TailnetSelves(ctx context.Context) []TailnetSelf {
+	socks, err := selfSockets(ctx)
 	useLocal := err == nil
 	if !useLocal {
 		socks = []string{""} // the CLI may still find tailscaled itself

@@ -46,8 +46,9 @@ func deviceRoleOf(ctx context.Context, r *client.Relay) deviceRole {
 
 // tailnetChecks reports each tailscaled on this machine, or one skip line when
 // there is none to ask. r is the joined relay, nil before a join. The relay
-// answers for the node that reached it, and with several tailscaleds running
-// that could be any of them, so it is asked only when one is running.
+// answers for the node that reached it. With several tailscaleds running that
+// could be any of them, and through a remote proxy it is the proxy's node, so
+// it is asked only when one is running and no remote proxy is in the way.
 func tailnetChecks(ctx context.Context, r *client.Relay) []check {
 	selves := tailnetSelves(ctx)
 	if len(selves) == 0 {
@@ -60,7 +61,7 @@ func tailnetChecks(ctx context.Context, r *client.Relay) []check {
 		}
 	}
 	role := roleUnknown
-	if r != nil && running == 1 {
+	if r != nil && running == 1 && !r.ThroughRemoteProxy() {
 		role = deviceRoleOf(ctx, r)
 	}
 	checks := make([]check, len(selves))
