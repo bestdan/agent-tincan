@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 	"github.com/mvanhorn/agent-tincan/internal/onboard"
 	"github.com/mvanhorn/agent-tincan/internal/policy"
 	"github.com/mvanhorn/agent-tincan/internal/relay"
@@ -556,6 +558,49 @@ func TestScheduleListFitsClientLimit(t *testing.T) {
 	}
 	if sch, err := client.CancelSchedule(t.Context(), m.grok, last.ID); err != nil || sch.Body != body {
 		t.Fatalf("cancelled body is %d bytes, %v", len(sch.Body), err)
+	}
+}
+
+// An admin listing covers any number of agents, so it comes in pages a
+// client can read whole.
+func TestScheduleListPagesAcrossAgents(t *testing.T) {
+	m := newScheduleMesh(t)
+	body := strings.Repeat("<", envelope.DefaultMaxBody)
+	owners := relay.MaxSchedulePage/store.MaxSchedules + 1
+	want := 0
+	for i := range owners {
+		name := fmt.Sprintf("agent%d", i)
+		if err := m.Store.PutAgent(t.Context(), identity.Agent{Name: name, Kind: "cli"}); err != nil {
+			t.Fatal(err)
+		}
+		for range store.MaxSchedules {
+			if _, err := m.Store.AddSchedule(t.Context(), envelope.Schedule{From: name, To: "muse", Body: body, EverySeconds: 3600, NextAt: m.clk.now().Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			want++
+		}
+	}
+	var page struct {
+		Schedules []envelope.Schedule `json:"schedules"`
+		NextAfter int64               `json:"next_after"`
+	}
+	if err := m.admin.Raw(t.Context(), "GET", "/v1/schedules?all=1", nil, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Schedules) != relay.MaxSchedulePage || page.NextAfter != page.Schedules[len(page.Schedules)-1].ID {
+		t.Fatalf("page has %d schedules, next_after %d", len(page.Schedules), page.NextAfter)
+	}
+	list, err := client.Schedules(t.Context(), m.admin, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != want {
+		t.Fatalf("listed %d schedules, want %d", len(list), want)
+	}
+	for i := 1; i < len(list); i++ {
+		if list[i].ID <= list[i-1].ID {
+			t.Fatalf("schedule %d repeats or goes back: %d after %d", i, list[i].ID, list[i-1].ID)
+		}
 	}
 }
 

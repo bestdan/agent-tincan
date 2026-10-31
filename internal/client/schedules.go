@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -64,15 +65,34 @@ func Schedules(ctx context.Context, c Rawer, all bool) ([]envelope.Schedule, err
 	if err := requireSchedules(ctx, c); err != nil {
 		return nil, err
 	}
-	path := "/v1/schedules"
+	q := url.Values{}
 	if all {
-		path += "?all=1"
+		q.Set("all", "1")
 	}
-	var out struct {
-		Schedules []envelope.Schedule `json:"schedules"`
+	var list []envelope.Schedule
+	var after int64
+	for {
+		path := "/v1/schedules"
+		if len(q) > 0 {
+			path += "?" + q.Encode()
+		}
+		var out struct {
+			Schedules []envelope.Schedule `json:"schedules"`
+			NextAfter int64               `json:"next_after"`
+		}
+		if err := c.Raw(ctx, "GET", path, nil, &out); err != nil {
+			return nil, err
+		}
+		list = append(list, out.Schedules...)
+		if out.NextAfter == 0 {
+			return list, nil
+		}
+		if out.NextAfter <= after {
+			return nil, errors.New("relay repeated a schedule page")
+		}
+		after = out.NextAfter
+		q.Set("after", strconv.FormatInt(after, 10))
 	}
-	err := c.Raw(ctx, "GET", path, nil, &out)
-	return out.Schedules, err
 }
 
 // CancelSchedule stops schedule id, one of this agent's or, from an admin

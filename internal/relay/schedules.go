@@ -23,6 +23,10 @@ const (
 	// maxScheduleInterval is the longest; it also keeps every_seconds from
 	// overflowing the arithmetic on it.
 	maxScheduleInterval = 366 * 24 * time.Hour
+	// MaxSchedulePage is the most schedules one listing returns. A preview
+	// is 200 characters, so a page stays well under the client's 4 MiB read
+	// limit however many agents an admin listing covers.
+	MaxSchedulePage = 500
 )
 
 // errScheduleDuringClaim refuses a schedule from a caller with an open
@@ -144,7 +148,15 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	} else if owner = s.agent(w, r); owner == "" {
 		return
 	}
-	list, err := s.store.Schedules(r.Context(), owner)
+	var after int64
+	if v := r.URL.Query().Get("after"); v != "" {
+		var err error
+		if after, err = strconv.ParseInt(v, 10, 64); err != nil || after < 0 {
+			writeErr(w, http.StatusBadRequest, errors.New("after must be a schedule id"))
+			return
+		}
+	}
+	list, err := s.store.Schedules(r.Context(), owner, after, MaxSchedulePage+1)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -152,10 +164,16 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []envelope.Schedule{}
 	}
+	out := map[string]any{}
+	if len(list) > MaxSchedulePage {
+		list = list[:MaxSchedulePage]
+		out["next_after"] = list[len(list)-1].ID
+	}
 	for i := range list {
 		list[i].Body = approvalPreview(client.ScheduleText(list[i].Body))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"schedules": list})
+	out["schedules"] = list
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleCancelSchedule deletes a schedule of the calling agent, or any
