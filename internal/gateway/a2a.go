@@ -296,6 +296,12 @@ func writeRPC(w http.ResponseWriter, id json.RawMessage, result any, e *rpcError
 	writeJSON(w, http.StatusOK, out)
 }
 
+// a2aValidID reports whether id, already known to be JSON, is a string or a
+// number.
+func a2aValidID(id json.RawMessage) bool {
+	return len(id) > 0 && (id[0] == '"' || id[0] == '-' || (id[0] >= '0' && id[0] <= '9'))
+}
+
 // a2aCall is one JSON-RPC call by guest to teammate.
 type a2aCall struct {
 	rc              *client.Relay
@@ -322,7 +328,8 @@ func (g *Gateway) a2a(w http.ResponseWriter, r *http.Request) {
 		Method  string          `json:"method"`
 		Params  json.RawMessage `json:"params"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&in); err != nil {
 		if _, batch := errors.AsType[*json.UnmarshalTypeError](err); batch {
 			writeRPC(w, nil, nil, rpcErr(rpcInvalidRequest, "expected one JSON-RPC request"))
 			return
@@ -330,8 +337,17 @@ func (g *Gateway) a2a(w http.ResponseWriter, r *http.Request) {
 		writeRPC(w, nil, nil, rpcErr(rpcParse, "not JSON"))
 		return
 	}
-	// A call with no id could get no answer, and a send must have one.
-	if in.JSONRPC != "2.0" || len(in.ID) == 0 || string(in.ID) == "null" || in.Method == "" {
+	if dec.Decode(new(any)) != io.EOF {
+		writeRPC(w, nil, nil, rpcErr(rpcParse, "more than one JSON value"))
+		return
+	}
+	// A call with no id could get no answer, and a send must have one. An id
+	// that is no id is not echoed, so the answer's id is null.
+	if !a2aValidID(in.ID) {
+		writeRPC(w, nil, nil, rpcErr(rpcInvalidRequest, "expected a JSON-RPC 2.0 request with an id"))
+		return
+	}
+	if in.JSONRPC != "2.0" || in.Method == "" {
 		writeRPC(w, in.ID, nil, rpcErr(rpcInvalidRequest, "expected a JSON-RPC 2.0 request with an id"))
 		return
 	}

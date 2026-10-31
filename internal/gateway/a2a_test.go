@@ -781,6 +781,41 @@ func TestA2AMethodsAndEnvelope(t *testing.T) {
 			t.Errorf("%s: %d %s, want %d", body, status, raw, code)
 		}
 	}
+
+	// A send that is not exactly one well-formed call makes no task, and a bad
+	// id does not come back in the answer.
+	const send = `"method":"SendMessage","params":{"message":{"messageId":"m1","role":"ROLE_USER","parts":[{"text":"hello"}]},"configuration":{"returnImmediately":true}}}`
+	for body, code := range map[string]int{
+		`{"jsonrpc":"2.0","id":1,` + send + `garbage`:                  -32700,
+		`{"jsonrpc":"2.0","id":1,` + send + `{"jsonrpc":"2.0","id":2}`: -32700,
+		`{"jsonrpc":"2.0","id":{"a":1},` + send:                        -32600,
+		`{"jsonrpc":"2.0","id":[1],` + send:                            -32600,
+		`{"jsonrpc":"2.0","id":true,` + send:                           -32600,
+	} {
+		status, raw, _ := e.post(t, tok, "muse", "1.0", body)
+		var out struct {
+			ID    json.RawMessage `json:"id"`
+			Error *rpcError       `json:"error"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil || status != http.StatusOK || out.Error == nil || out.Error.Code != code || string(out.ID) != "null" {
+			t.Errorf("%s: %d %s, want %d and a null id", body, status, raw, code)
+		}
+	}
+	if got := countRows(t, e, `SELECT count(*) FROM requests`); got != 0 {
+		t.Fatalf("malformed sends made %d tasks", got)
+	}
+
+	// A string id, and whitespace after the call, are fine.
+	status, raw, _ := e.post(t, tok, "muse", "1.0", `{"jsonrpc":"2.0","id":"a",`+send+"\n")
+	var out struct {
+		ID     json.RawMessage `json:"id"`
+		Result struct {
+			Task a2aTask `json:"task"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || status != http.StatusOK || string(out.ID) != `"a"` || out.Result.Task.ID == "" {
+		t.Fatalf("well-formed send: %d %s", status, raw)
+	}
 }
 
 // An unpublished teammate has no endpoint, even for a guest listed for it,
@@ -1035,6 +1070,30 @@ func TestConnectGuestRefusesNoHoldAndReplace(t *testing.T) {
 	}
 	if a, ok, _ := e.m.Dir.Agent(t.Context(), "muse"); !ok || a.Guest.Set() {
 		t.Fatalf("muse = %+v, %v", a, ok)
+	}
+}
+
+// A connect that could not mint a code gave nobody a way in, so it must not
+// keep the name: the owner's retry would be refused as taken.
+func TestConnectGuestFreesTheNameWhenNoCodeIsMade(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	db := e.m.Store.DB()
+	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER no_codes BEFORE INSERT ON gw_codes BEGIN SELECT RAISE(ABORT, 'no codes'); END`); err != nil {
+		t.Fatal(err)
+	}
+	admin := e.m.Client(t, "admin")
+	terms := client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600}
+	if _, err := admin.ConnectGuest(t.Context(), "pal", terms); err == nil {
+		t.Fatal("connect succeeded with no code")
+	}
+	if _, ok, _ := e.m.Dir.Agent(t.Context(), "pal"); ok {
+		t.Fatal("a failed connect left pal behind")
+	}
+	if _, err := db.ExecContext(t.Context(), `DROP TRIGGER no_codes`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ConnectGuest(t.Context(), "pal", terms); err != nil {
+		t.Fatalf("retry: %v", err)
 	}
 }
 

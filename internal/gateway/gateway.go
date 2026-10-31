@@ -346,16 +346,22 @@ func (c Connector) Connect(ctx context.Context, name string, replace bool) (stri
 }
 
 // ConnectGuest binds a new virtual guest and mints a login code. It returns
-// the gateway's base URL, which agent cards hang off.
+// the gateway's base URL, which agent cards hang off. The code comes first
+// because a guest's name cannot be connected twice: a failed bind leaves only a
+// code nobody was given, which expires, while a failed mint after the bind
+// would leave the name taken with no way to log in.
 func (c Connector) ConnectGuest(ctx context.Context, name string, terms identity.GuestTerms) (string, string, error) {
 	if err := c.dropOldTokens(ctx, name); err != nil {
+		return "", "", err
+	}
+	code, err := c.OAuth.MintLoginCode(ctx, name)
+	if err != nil {
 		return "", "", err
 	}
 	if err := c.Dir.BindVirtualGuest(ctx, name, terms); err != nil {
 		return "", "", err
 	}
-	code, err := c.OAuth.MintLoginCode(ctx, name)
-	return code, strings.TrimRight(c.Base, "/"), err
+	return code, strings.TrimRight(c.Base, "/"), nil
 }
 
 // dropOldTokens clears what a name's last holder left when nobody virtual holds
