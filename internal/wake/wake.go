@@ -1327,7 +1327,7 @@ func secretForms(sec string) []string {
 			}
 		}
 	}
-	for _, f := range forms[:len(forms):len(forms)] {
+	for _, f := range slices.Clip(forms) {
 		forms = append(forms, strings.ReplaceAll(f, "/", `\/`))
 	}
 	slices.Sort(forms)
@@ -1366,14 +1366,14 @@ func leaksSecret(s string, secrets []string) bool {
 		}
 		views = append(views, strings.Join(strs, "\n"))
 	}
-	for _, v := range views[:len(views):len(views)] {
+	for _, v := range slices.Clip(views) {
 		if d, err := url.PathUnescape(v); err == nil && d != v {
 			views = append(views, d)
 		} else if d, err := url.QueryUnescape(v); err == nil && d != v {
 			views = append(views, d)
 		}
 	}
-	for _, v := range views[:len(views):len(views)] {
+	for _, v := range slices.Clip(views) {
 		if d := html.UnescapeString(v); d != v {
 			views = append(views, d)
 		}

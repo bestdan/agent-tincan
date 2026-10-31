@@ -387,8 +387,7 @@ func unreachable(err error) bool {
 	if socksConnectFailed(err) {
 		return true
 	}
-	var api *APIError
-	if errors.As(err, &api) {
+	if api, ok := errors.AsType[*APIError](err); ok {
 		// Through a proxy (Muse), a relay that no longer answers comes
 		// back as the proxy's 502 or 504; the relay never sends those.
 		return api.Code == http.StatusBadGateway || api.Code == http.StatusGatewayTimeout

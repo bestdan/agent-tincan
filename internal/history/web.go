@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -971,9 +972,9 @@ func (w *WebAgent) anchorFor(ctx context.Context, convID, message string) (reply
 	if err == nil {
 		var nodes []webNode
 		if nodes, err = w.nodes(raw); err == nil {
-			for i := len(nodes) - 1; i >= 0; i-- {
-				if nodes[i].user {
-					a.prevUser = nodes[i].id
+			for _, node := range slices.Backward(nodes) {
+				if node.user {
+					a.prevUser = node.id
 					break
 				}
 			}

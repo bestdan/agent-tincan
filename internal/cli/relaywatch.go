@@ -15,7 +15,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
-	"github.com/mvanhorn/agent-tincan/internal/history"
 	"github.com/mvanhorn/agent-tincan/internal/watch"
 )
 
@@ -144,11 +143,11 @@ func relayWatchInstallCmd() *cobra.Command {
 				return err
 			}
 			res, err := watch.InstallService(watch.ServiceOptions{
-				ServiceOptions: history.ServiceOptions{Binary: binary},
-				Config:         path,
-				AlertCmd:       f.alertCmd,
-				After:          f.after,
-				Every:          f.every,
+				Binary:   binary,
+				Config:   path,
+				AlertCmd: f.alertCmd,
+				After:    f.after,
+				Every:    f.every,
 			})
 			if err != nil {
 				return err
