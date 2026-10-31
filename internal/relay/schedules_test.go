@@ -505,6 +505,10 @@ func TestScheduleCreateRefusals(t *testing.T) {
 		"also":           {map[string]any{"to": "muse", "body": "x", "at": soon, "also": []string{"instinct"}}, http.StatusBadRequest},
 		"attachment":     {map[string]any{"to": "muse", "body": "x", "at": soon, "attachments": []map[string]string{{"id": "a1"}}}, http.StatusBadRequest},
 		"notify":         {map[string]any{"to": "muse", "body": "x", "at": soon, "kind": "notify"}, http.StatusBadRequest},
+		"project":        {map[string]any{"to": "muse", "body": "x", "at": soon, "project": "tincan"}, http.StatusBadRequest},
+		"project, every": {map[string]any{"to": "muse", "body": "x", "every_seconds": 3600, "project": "tincan"}, http.StatusBadRequest},
+		"then":           {map[string]any{"to": "muse", "body": "x", "at": soon, "then": map[string]string{"to": "instinct", "body": "y"}}, http.StatusBadRequest},
+		"then, every":    {map[string]any{"to": "muse", "body": "x", "every_seconds": 3600, "then": map[string]string{"to": "instinct", "body": "y"}}, http.StatusBadRequest},
 		"self":           {map[string]any{"to": "grokbot", "body": "x", "at": soon}, http.StatusBadRequest},
 		"unknown target": {map[string]any{"to": "nobody", "body": "x", "at": soon}, http.StatusNotFound},
 	} {

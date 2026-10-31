@@ -81,6 +81,10 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		err = errors.New("schedule: a scheduled ask goes to one teammate")
 	case len(req.Attachments) > 0:
 		err = errors.New("schedule: a scheduled ask takes no attachments")
+	case req.Project != "":
+		err = errors.New("schedule: a scheduled ask cannot name a project")
+	case req.Then != nil:
+		err = errors.New("schedule: a scheduled ask takes no then")
 	case in.At.IsZero() && in.EverySeconds == 0:
 		err = errors.New("schedule: at or every_seconds is required")
 	case !in.At.IsZero() && !in.At.After(now):

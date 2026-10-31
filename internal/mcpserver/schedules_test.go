@@ -51,10 +51,12 @@ func TestScheduledAskRefusesWhatItCannotCarry(t *testing.T) {
 	m := testrelay.New(t, relay.Config{})
 	cs := session(t, m, "grokbot")
 	for name, extra := range map[string]map[string]any{
-		"also":   {"also": []string{"instinct"}},
-		"notify": {"notify": true},
-		"parent": {"parent_id": "abc"},
-		"attach": {"attach": []string{"/tmp/x"}},
+		"also":    {"also": []string{"instinct"}},
+		"notify":  {"notify": true},
+		"parent":  {"parent_id": "abc"},
+		"attach":  {"attach": []string{"/tmp/x"}},
+		"project": {"project": "tincan"},
+		"then":    {"then": map[string]string{"to": "instinct", "message": "y"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			args := map[string]any{"to": "muse", "message": "x", "every": "1h"}
@@ -66,6 +68,9 @@ func TestScheduledAskRefusesWhatItCannotCarry(t *testing.T) {
 	}
 	if inbox, err := m.Client(t, "muse").Poll(t.Context(), 0); err != nil || len(inbox.Requests) != 0 {
 		t.Fatalf("sent = %+v, %v", inbox, err)
+	}
+	if list, err := client.Schedules(t.Context(), m.Client(t, "grokbot"), false); err != nil || len(list) != 0 {
+		t.Fatalf("scheduled = %+v, %v", list, err)
 	}
 }
 

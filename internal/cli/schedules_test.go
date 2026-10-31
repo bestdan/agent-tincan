@@ -74,6 +74,10 @@ func TestAskScheduleRefusals(t *testing.T) {
 		"notify":          {"muse", "x", "--every", "1h", "--notify"},
 		"parent":          {"muse", "x", "--every", "1h", "--parent", "abc"},
 		"attach":          {"muse", "x", "--every", "1h", "--attach", "/tmp/x"},
+		"project, every":  {"muse", "x", "--every", "1h", "--project", "tincan"},
+		"project, at":     {"muse", "x", "--at", "2h", "--project", "tincan"},
+		"then, every":     {"muse", "x", "y", "--every", "1h", "--then", "instinct"},
+		"then, at":        {"muse", "x", "y", "--at", "2h", "--then", "instinct"},
 		"too often":       {"muse", "x", "--every", "5m"},
 		"empty at":        {"muse", "x", "--at", ""},
 		"empty every":     {"muse", "x", "--every", ""},
@@ -88,5 +92,8 @@ func TestAskScheduleRefusals(t *testing.T) {
 	}
 	if inbox, err := m.Client(t, "muse").Poll(t.Context(), 0); err != nil || len(inbox.Requests) != 0 {
 		t.Fatalf("sent = %+v, %v", inbox, err)
+	}
+	if list, err := client.Schedules(t.Context(), m.Client(t, "grokbot"), false); err != nil || len(list) != 0 {
+		t.Fatalf("scheduled = %+v, %v", list, err)
 	}
 }

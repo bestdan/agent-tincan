@@ -542,8 +542,8 @@ instead, as a new request with every send check applied at that time.
 			// Changed, not the values: an empty --at "$WHEN" asked for a
 			// schedule and must never turn into a send now.
 			if cmd.Flags().Changed("at") || cmd.Flags().Changed("every") {
-				if len(targets) > 1 || notify || parent != "" || len(attach) > 0 {
-					return errors.New("a scheduled ask goes to one teammate, with no --notify, --parent or --attach")
+				if len(targets) > 1 || notify || parent != "" || len(attach) > 0 || project != "" || thenTo != "" {
+					return errors.New("a scheduled ask goes to one teammate, with no --notify, --parent, --attach, --project or --then")
 				}
 				return scheduleAsk(cmd, r, client.ScheduledAsk{To: targets[0], Body: body, Urgent: urgent}, at, every, asJSON)
 			}

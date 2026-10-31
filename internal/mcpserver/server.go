@@ -163,7 +163,7 @@ type askIn struct {
 	ParentID    string   `json:"parent_id,omitempty" jsonschema:"the request id you are handling, when this ask continues it"`
 	Attach      []string `json:"attach,omitempty" jsonschema:"local file paths to attach (images or small files, at most 8, 10 MB each)"`
 	Project     string   `json:"project,omitempty" jsonschema:"the project of the session this is for, usually its repo directory name, e.g. agent-tincan; that session gets it first, and any session of the teammate after about 10 minutes"`
-	At          string   `json:"at,omitempty" jsonschema:"send this ask later instead of now: an RFC 3339 time, or a delay such as 2h. One teammate only, with no also, notify, parent_id or attach"`
+	At          string   `json:"at,omitempty" jsonschema:"send this ask later instead of now: an RFC 3339 time, or a delay such as 2h. One teammate only, with no also, notify, parent_id, attach, project or then"`
 	Every       string   `json:"every,omitempty" jsonschema:"send this ask on a repeat, such as 1h (at least 15m), first at at or else one interval from now. Same limits as at"`
 }
 
@@ -270,8 +270,8 @@ func Onboard(ctx context.Context, r Roster, o onboard.Options, section string) (
 // carry is refused rather than dropped, and nothing here falls through to a
 // send: on a relay that takes no schedules the ask fails.
 func scheduleAsk(ctx context.Context, b Backend, in askIn) (*mcp.CallToolResult, any, error) {
-	if len(in.Also) > 0 || in.Notify || in.ParentID != "" || len(in.Attach) > 0 {
-		return fail(errors.New("a scheduled ask goes to one teammate, with no also, notify, parent_id or attach"))
+	if len(in.Also) > 0 || in.Notify || in.ParentID != "" || len(in.Attach) > 0 || in.Project != "" || in.Then != nil {
+		return fail(errors.New("a scheduled ask goes to one teammate, with no also, notify, parent_id, attach, project or then"))
 	}
 	now := time.Now()
 	at, every, err := client.ParseWhen(in.At, in.Every, now)
