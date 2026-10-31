@@ -352,7 +352,31 @@ func (r *Relay) proxyFor(req *http.Request) (*url.URL, error) {
 	if pu != nil {
 		return pu, nil
 	}
-	return http.ProxyFromEnvironment(req)
+	return envProxy(req)
+}
+
+// envProxy is the environment's proxy for a request. Tests replace it: the
+// standard library reads the environment only once.
+var envProxy = http.ProxyFromEnvironment
+
+// ThroughRemoteProxy says relay calls leave this machine through a proxy on
+// another host, so the relay sees that host's tailnet node, not this
+// machine's. A proxy on loopback stays here, as a userspace tailscaled's does.
+// A proxy that cannot be read counts as remote.
+func (r *Relay) ThroughRemoteProxy() bool {
+	req, err := http.NewRequest("GET", r.Base(), nil)
+	if err != nil {
+		return true
+	}
+	pu, err := r.proxyFor(req)
+	if err != nil {
+		return true
+	}
+	if pu == nil || strings.EqualFold(pu.Hostname(), "localhost") {
+		return false
+	}
+	ip := net.ParseIP(pu.Hostname())
+	return ip == nil || !ip.IsLoopback()
 }
 
 // NewRelayFor returns a client for the saved config at ConfigPath(). It
