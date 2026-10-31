@@ -1190,12 +1190,13 @@ func TestLocalAPINetmapConcurrentLookups(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	after := conns.Load()
 	for range 20 {
 		wantLocalAPINetmap(t)
 	}
-	if n := conns.Load(); n != after || n > 20 {
-		t.Fatalf("connections: %d after 20 concurrent lookups, %d after 20 more sequential; want no growth", after, n)
+	// A count taken after wg.Wait could be low: a lookup that got a freed
+	// connection leaves its own dial to finish in the background.
+	if n := conns.Load(); n > 20 {
+		t.Fatalf("connections: %d after 20 concurrent and 20 sequential lookups, want at most 20", n)
 	}
 }
 
