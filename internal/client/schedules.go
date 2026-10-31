@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 )
@@ -114,6 +115,18 @@ func ParseWhen(at, every string, now time.Time) (time.Time, time.Duration, error
 	return when, interval, nil
 }
 
+// TerminalSafe maps the control and bidi runes in s to spaces. Relay text is
+// data, including when it contains terminal control sequences: it must not
+// be able to rewrite what a listing shows the owner.
+func TerminalSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
 // schedulePreview is how much of an ask's text a schedule listing shows.
 const schedulePreview = 80
 
@@ -131,7 +144,7 @@ func FormatSchedules(list []envelope.Schedule, now time.Time) string {
 	}
 	var b strings.Builder
 	for _, s := range list {
-		body := strings.Join(strings.Fields(s.Body), " ")
+		body := strings.Join(strings.Fields(TerminalSafe(s.Body)), " ")
 		if r := []rune(body); len(r) > schedulePreview {
 			body = string(r[:schedulePreview]) + "..."
 		}

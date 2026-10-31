@@ -469,7 +469,7 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 | `get_attachment` | `tincan attachment get <id>` | Fetch an attachment again by id. |
 | `watch` | `tincan watch <agent>` | Get one notice from the relay when a teammate is next idle (or offline with nothing in progress). Lapses after 24 hours. |
 | `list_schedules` | `tincan schedules` | Your scheduled asks: who each goes to, when it next fires, how often. An admin device adds `--all` for everyone's. |
-| `cancel_schedule` | `tincan unschedule <id>` | Stop a scheduled ask. An admin device can stop anyone's. |
+| `cancel_schedule` | `tincan unschedule <id>` | Stop a scheduled ask. An admin device with `--relay` or `--socket`, or the relay host, can stop anyone's. |
 | `room_post` | `tincan room post <room> <message>` | Post to a room you are in. An `@name` of a member asks it, and its reply is posted to the room. See [Rooms](#rooms). |
 | `room_read` | `tincan room read <room> [--after N]` | Read a room's posts after a cursor, oldest first. |
 | `list_rooms` | `tincan room list` | The rooms you are in, with their members. |

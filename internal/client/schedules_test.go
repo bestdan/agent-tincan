@@ -76,6 +76,10 @@ func TestFormatSchedules(t *testing.T) {
 	if strings.Contains(out, strings.Repeat("x", 200)) {
 		t.Errorf("body not cut: %q", out)
 	}
+	hidden := FormatSchedules([]envelope.Schedule{{ID: 5, From: "grokbot", To: "muse", Body: "\x1b[2K\x1b[1A\u202egone\x07", NextAt: now.Add(time.Hour)}}, now)
+	if strings.ContainsAny(hidden, "\x1b\u202e\x07") || !strings.Contains(hidden, "[2K [1A gone") {
+		t.Fatalf("control text reached the listing: %q", hidden)
+	}
 	if got := FormatSchedules(nil, now); !strings.Contains(got, "No scheduled asks") {
 		t.Fatalf("empty = %q", got)
 	}

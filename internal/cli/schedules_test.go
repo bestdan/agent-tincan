@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
@@ -44,6 +45,27 @@ func TestAskScheduleCommands(t *testing.T) {
 	}
 }
 
+// The relay host usually has no saved config, and the owner stops what
+// tincan schedules --all shows with no flags, whoever owns it.
+func TestUnscheduleOnRelayHostWithoutFlags(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	useConfig(t, client.Config{})
+	serveAdminSocket(t, m)
+	sch, err := client.ScheduleAsk(t.Context(), m.Client(t, "grokbot"), client.ScheduledAsk{To: "muse", Body: "x", Every: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(t, schedulesCmd(), "--all"); err != nil || !strings.Contains(out, "grokbot to muse") {
+		t.Fatalf("schedules --all = %q, %v", out, err)
+	}
+	if out, err := run(t, unscheduleCmd(), fmt.Sprint(sch.ID)); err != nil || !strings.Contains(out, "Cancelled") {
+		t.Fatalf("unschedule = %q, %v", out, err)
+	}
+	if list, err := client.Schedules(t.Context(), m.Client(t, "grokbot"), false); err != nil || len(list) != 0 {
+		t.Fatalf("left = %+v, %v", list, err)
+	}
+}
+
 func TestAskScheduleRefusals(t *testing.T) {
 	m := testrelay.New(t, relay.Config{})
 	useConfig(t, client.Config{Relay: m.URL("grokbot"), Agent: "grokbot"})
@@ -53,6 +75,8 @@ func TestAskScheduleRefusals(t *testing.T) {
 		"parent":          {"muse", "x", "--every", "1h", "--parent", "abc"},
 		"attach":          {"muse", "x", "--every", "1h", "--attach", "/tmp/x"},
 		"too often":       {"muse", "x", "--every", "5m"},
+		"empty at":        {"muse", "x", "--at", ""},
+		"empty every":     {"muse", "x", "--every", ""},
 		"past":            {"muse", "x", "--at", "2001-01-01T00:00:00Z"},
 		"bad at":          {"muse", "x", "--at", "tomorrow"},
 	} {

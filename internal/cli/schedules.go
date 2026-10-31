@@ -63,14 +63,17 @@ func unscheduleCmd() *cobra.Command {
 	var relayURL, socket string
 	cmd := &cobra.Command{
 		Use:   "unschedule <id>",
-		Short: "Stop a scheduled ask (an admin device can stop anyone's with --relay or --socket)",
+		Short: "Stop a scheduled ask (the relay host, or an admin device with --relay or --socket, can stop anyone's)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("schedule id %q is not a number", args[0])
 			}
-			r, err := scheduleRelay(relayURL != "" || socket != "", socket, relayURL)
+			// On the relay host the local admin socket stops anything
+			// tincan schedules --all shows, with no flags, as for every
+			// admin command.
+			r, err := scheduleRelay(relayURL != "" || socket != "" || localAdminSocket() != "", socket, relayURL)
 			if err != nil {
 				return err
 			}
