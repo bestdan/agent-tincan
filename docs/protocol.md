@@ -17,6 +17,7 @@ The relay answers 403 to any request whose `Host` is not one of its own addresse
 | `chain` | relay | Agents the request has passed through, oldest first. |
 | `urgent` | client | Optional boolean, default false. Urgent requests are delivered first, oldest first within each priority. Relay-side wakes bypass debounce and the online skip, within the hourly wake cap. |
 | `kind` | client | `ask` (expects a reply, the default), `notify`, or `ping` (automatic client reply). |
+| `project` | client | Optional. The project of the target's session this request is for: up to 64 bytes of lowercase letters, digits, `.`, `_` and `-`. Anything else is a 400, and so is a `ping` that names one. See Projects within one agent. |
 | `body` | client | The request text. Capped at 256 KB. May be empty when the request carries attachments. |
 | `attachments` | client names ids, relay fills the rest | Files stored on the relay: `[{"id", "name", "mime", "size"}]`. See Attachments. Left out when there are none. |
 | `created_at` | relay | When the relay queued it. |
@@ -90,7 +91,7 @@ A reply starts unseen by the agent that sent the request. It counts as seen once
 | `replies=take` | Returned, left unseen until the client acknowledges them (below). check_inbox and `tincan inbox` use this. |
 | `replies=keep` | Returned, left unseen, never acknowledged. `tincan wait` uses this to end the wait and print a count. |
 | `replies=none` | Left out, and they do not end the hold. |
-| `peek=1` | Nothing is taken. The response is `{"waiting": <total>, "queued": <requests>}`. When requests are queued it also carries `"pending": [{"id": "...", "from": "..."}, ...]`, naming up to 50 of them, oldest first, without bodies. With `replies=keep` (or `take`) it also carries `"replies": [...]` and `waiting` counts them; without, replies are not counted. A peek changes no request's state (nothing becomes `delivered` or `claimed`) and marks no reply seen. `tincan listen` and the Claude Code channel (`tincan mcp --channel`) send `peek=1&replies=keep`; the channel never claims, and the model takes the items with check_inbox. `pending` is additive: clients that predate it ignore it. |
+| `peek=1` | Nothing is taken. The response is `{"waiting": <total>, "queued": <requests>}`. When requests are queued it also carries `"pending": [{"id": "...", "from": "..."}, ...]`, naming up to 50 of them, oldest first, without bodies. With `replies=keep` (or `take`) it also carries `"replies": [...]` and `waiting` counts them; without, replies are not counted. A peek changes no request's state (nothing becomes `delivered` or `claimed`) and marks no reply seen. `tincan listen` and the Claude Code channel (`tincan mcp --channel`) send `peek=1&replies=keep`; the channel never claims, and the model takes the items with check_inbox. `pending` is additive: clients that predate it ignore it. When the caller's project leaves queued requests out (see Projects within one agent), the response also carries `"hidden": <count>` and `"hidden_ids": ["...", ...]`, naming up to 50 of them without bodies, including on a peek with nothing else to report, which then answers 200 rather than 204. |
 
 Any other `replies` value is a 400.
 
@@ -113,6 +114,25 @@ Several clients can share one agent name, for example one `tincan mcp` per Claud
 - A session that makes no call to the relay for 10 minutes (its window closed, or its MCP server restarted and took a new id) counts as gone, and replies to its requests open to the agent's other sessions, so the next one to poll gets them instead of nobody. A channel MCP server peeks every 25 seconds and one without a channel calls `whoami` every 2 minutes, so a running window never looks gone. The relay keeps session activity in memory, so for 10 minutes after it starts every session counts as running. `GET /v1/requests/{id}` and a sessionless poll (`tincan inbox`) read any reply at any time, and acknowledgements stay agent-wide.
 - An ask with no `parent_id` is filed under (gets the `parent_id` and `trace_id` of) only an open claim made from the same session or with no session. When the agent-wide rule (exactly one open claim) would continue a claim from another session, the ask still takes that claim's `chain` and `hop`, so the cycle check, the hop limit, and allowlists see what they saw before sessions; only the trace is new.
 - Wake, the roster, and the audit log stay per agent and do not show sessions.
+
+### Projects within one agent
+
+An ask can name the project of the session it is for, so it reaches the window on the right repo. A client advertises its project with the `X-Tincan-Project` header on every call, in the same format as the `project` field of a request. Any other value is a 400 on the routes that read it (poll, claim). The header is optional. `tincan mcp` sends the name of the git repository around its working directory, with a linked worktree counting as its main repository; `--project <label>` sets it and `--no-project` sends none. Set the request's field with `tincan ask --project <label>` or the `ask` tool's `project`.
+
+| Request `project` | Caller's project | Queued 10 minutes | Taken |
+|---|---|---|---|
+| none | any | n/a | yes |
+| set | same | n/a | yes |
+| set | different or none | no | no |
+| set | different or none | yes | yes |
+
+- A poll, a claim by id and a peek all apply this table. A peek's `queued` and `pending` hold only what the same caller's poll would take, so a window that has nothing to take stays quiet; `hidden_ids` gives the ids of the rest, so a client can tell them from requests that left the queue. A claim that the table refuses is a 409.
+- Fallback goes by how long the request has been queued, not by whether a session of the project looks live, because an open idle window keeps calling the relay. The clock starts when the request is queued, restarts when the owner approves a held request or the asker answers a clarification, and keeps running when a delivery or claim lease lapses.
+- A client that sends no header takes a request that names a project only after fallback, and takes everything else as before. A relay that predates projects ignores the header and the field, and any session takes the request.
+- A request email goes to no session, so an ask that names a project is emailed only after fallback.
+- A wake stays per agent and carries no label, so a webhook or email agent is woken for such an ask at once, and again when it falls back, since its inbox shows nothing before then.
+- A move (see Failover) drops the label, since it named a session of the old target. A group names the project for each target. A room mention names none.
+- Labels the relay sees are kept in memory only. The label a request names is stored on the request. A target reads it as `project` on the request, except on a request held and never approved.
 
 ### Request emails and email replies
 
@@ -427,6 +447,8 @@ Audit rows `room_created`, `room_member_added`, `room_member_removed` and `room_
 The `POST /v1/send` response is the queued request with one optional extra field, `target`, set when the recipient is on wake method `schedule`: `{"check_every_seconds": 300, "expect_reply_seconds": 600, "overdue": false}`, or on `webhook` or `email` and woken before: `{"woken_at": "...", "wake_result": "ok", "unanswered": true}`, with the roster's meanings. Those fields are omitted for other recipients, for requests held for owner approval, and by older relays, which older clients ignore. The relay does not store it, and `GET /v1/requests/{id}` never returns it; the tincan client copies it from the send response onto the result an ask returns, so the pending-reply text can say when to expect an answer.
 
 For every recipient whose wake method the relay knows, `target` also carries `wake_via` and `listening`: `{"wake_via": "socket", "listening": true}`. `wake_via` is `socket` while one of the recipient's sessions has peeked advertising `socket-wake` (see Ping capability) within the last 10 minutes, and otherwise the recipient's wake method from the relay's wake config (`channel`, `wait`, `command`, `none`, `schedule`, `webhook` or `email`). `listening` is the roster's `online`: an inbox poll within one poll hold plus 30 seconds. They sit beside the schedule and wake fields above, and their names differ from the roster's `wake` and `online` so the roster entry, which carries target fields at its top level, keeps both. A relay with no wake config sends neither. The tincan client adds one line to the pending-reply text from them: for `socket`, that the recipient is listening and a session will be prompted when it is idle, or is not connected and the request waits until a session opens; for `channel`, the same, except that a listening session started without channels may not see the request until its next turn; for `wait` and `command`, that it is listening and will start a turn when it picks the request up, or that its listener is not running and the request waits until it restarts; and for `none`, that it checks only when its owner next prompts it. `schedule`, `webhook` and `email` keep the lines their own fields give and get no new one. The line states facts and never a reply time. A client reading a relay that sends neither field shows the text it showed before.
+
+When the send names a project, `target` also carries `project_match`: `live` when a session of that project called the relay in the last 10 minutes, `none` when none did and the request waits for fallback. It is left out for a request that moved or is held for approval, and for 10 minutes after the relay starts, while it cannot tell which sessions are gone. It is a report only: delivery goes by the table in Projects within one agent, so a `live` session that never polls does not keep the request from falling back.
 
 ## Ping capability
 

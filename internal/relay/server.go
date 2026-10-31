@@ -218,6 +218,11 @@ type Server struct {
 	// so a poll can tell a session that is still running from one that is
 	// gone. In memory only; see replyScope.
 	sessions map[string]map[string]time.Time
+	// projects is when each agent's project labels (client.ProjectHeader)
+	// last called, so a send can tell the asker whether a session of the
+	// project it named is live. It never decides delivery: that goes by
+	// age, in the store. In memory only.
+	projects map[string]map[string]time.Time
 	// socketWake is when each agent's sessions last polled advertising
 	// client.SocketWakeFeature, so a send can tell the asker the target
 	// wakes by socket. A session's entry goes when it polls without the
@@ -296,7 +301,7 @@ func New(dir *identity.Directory, st *store.Store, cfg Config) *Server {
 	cfg.defaults()
 	s := &Server{cfg: cfg, dir: dir, store: st, hub: newHub(), prep: newChain{}, lastPoll: map[string]time.Time{}, polling: map[string]int{},
 		lastSeen: map[string]time.Time{}, persisted: map[string]time.Time{}, versions: loadVersions(st), blobs: defaultAttachmentDir(st), key: loadRelayKey(st),
-		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, nonces: newNonceBook(), stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
+		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, projects: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, nonces: newNonceBook(), stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
 	s.statsCache = map[time.Duration]statsEntry{}
 	s.lookupAgent = dir.Agent
 	if s.cfg.FailoverPath == "" && st != nil && st.Path() != "" {
@@ -555,19 +560,41 @@ func (s *Server) Sweep(ctx context.Context) {
 			s.hub.notify(inboxKey(t.To))
 			// An agent woken by the relay has no poller to see the requeue,
 			// so wake it again; pollers are skipped by the waker itself.
-			req := envelope.Request{ID: t.ID, TraceID: t.TraceID, From: t.From, To: t.To, Urgent: t.Urgent}
-			if rq, ok := s.events.(Requeuer); ok {
-				rq.Requeued(ctx, req)
-			} else if s.events != nil {
-				s.events.Queued(ctx, req)
-			}
+			s.wakeRequeued(ctx, envelope.Request{ID: t.ID, TraceID: t.TraceID, From: t.From, To: t.To, Urgent: t.Urgent})
 		}
 	}
+	s.wakeFallenBack(ctx)
 	s.failoverSweep(ctx)
 	if err := s.store.ExpireWatches(ctx); err != nil {
 		log.Printf("watches: expire: %v", err)
 	}
 	s.checkWatches(ctx, "")
+}
+
+// wakeRequeued wakes req's target for a request it may have looked past: a
+// recent poll does not prove anything holds it.
+func (s *Server) wakeRequeued(ctx context.Context, req envelope.Request) {
+	if rq, ok := s.events.(Requeuer); ok {
+		rq.Requeued(ctx, req)
+	} else if s.events != nil {
+		s.events.Queued(ctx, req)
+	}
+}
+
+// wakeFallenBack tells the targets of requests that just opened to any
+// session. An agent woken by the relay polled when the ask arrived and was
+// handed nothing, and that poll ended its follow-ups, so nothing else would
+// send it back. The wake carries no label, like any other.
+func (s *Server) wakeFallenBack(ctx context.Context) {
+	reqs, err := s.store.FallenBack(ctx, SessionGrace)
+	if err != nil {
+		log.Printf("sweep: project fallback: %v", err)
+		return
+	}
+	for _, req := range reqs {
+		s.hub.notify(inboxKey(req.To))
+		s.wakeRequeued(ctx, req)
+	}
 }
 
 func isLocalAdmin(ctx context.Context) bool {
@@ -606,6 +633,9 @@ func (s *Server) agent(w http.ResponseWriter, r *http.Request) string {
 	sess, sessErr := session(r)
 	if sessErr == nil {
 		s.touchSession(res.Name, sess)
+	}
+	if label, err := project(r); err == nil {
+		s.touchProject(res.Name, label)
 	}
 	markHeld(r, res.Name)
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/poll" {
@@ -771,7 +801,34 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, statusFor(err), err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, envelope.SendResponse{Request: req, Target: s.recipientTarget(r.Context(), req.To)})
+	writeJSON(w, http.StatusCreated, envelope.SendResponse{Request: req, Target: s.withProjectMatch(s.recipientTarget(r.Context(), req.To), req)})
+}
+
+// withProjectMatch adds to t whether a session of the project req names is
+// live, read after submit so a request that moved reports nothing. A held
+// request reports nothing either: no session can take it, and its fallback
+// clock starts at approval. A relay too new to know its sessions adds nothing
+// rather than say none is live.
+func (s *Server) withProjectMatch(t *envelope.Target, req envelope.Request) *envelope.Target {
+	if req.Project == "" || req.Status == envelope.StatusHeld {
+		return t
+	}
+	now := s.cfg.Now()
+	s.mu.Lock()
+	seen, ok := s.projects[req.To][req.Project]
+	s.mu.Unlock()
+	match := envelope.ProjectNone
+	switch {
+	case ok && now.Sub(seen) < SessionGrace:
+		match = envelope.ProjectLive
+	case now.Sub(s.started) < SessionGrace:
+		return t
+	}
+	if t == nil {
+		t = &envelope.Target{}
+	}
+	t.ProjectMatch = match
+	return t
 }
 
 // submit takes a new request from req.From through every step a send
@@ -922,6 +979,12 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	label, err := project(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	scope := store.QueueScope{Project: label, Grace: SessionGrace}
 	hold := durationParam(r, "hold", s.cfg.PollHold, s.cfg.PollHold)
 	peek := r.URL.Query().Get("peek") == "1"
 	replies := r.URL.Query().Get("replies")
@@ -961,7 +1024,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 			// Report what is waiting without delivering it, so a listener
 			// can nudge the agent and the agent's own check_inbox still
 			// receives it. waiting counts the replies it was asked for.
-			n, pings, err := s.store.CountQueuedWithPings(r.Context(), name)
+			n, pings, err := s.store.CountQueuedWithPingsFor(r.Context(), name, scope)
 			if err != nil {
 				writeErr(w, http.StatusInternalServerError, err)
 				return
@@ -972,7 +1035,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 					out["pings"] = pings
 				}
 				if n > 0 {
-					urgent, err := s.store.CountUrgentQueued(r.Context(), name)
+					urgent, err := s.store.CountUrgentQueuedFor(r.Context(), name, scope)
 					if err != nil {
 						writeErr(w, http.StatusInternalServerError, err)
 						return
@@ -980,12 +1043,15 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 					if urgent > 0 {
 						out["urgent"] = urgent
 					}
-					pending, err := s.store.PendingRequests(r.Context(), name, MaxPeekPending)
+					pending, err := s.store.PendingRequestsFor(r.Context(), name, scope, MaxPeekPending)
 					if err != nil {
 						writeErr(w, http.StatusInternalServerError, err)
 						return
 					}
 					out["pending"] = pending
+				}
+				if hidden, ids := s.hiddenQueued(r.Context(), name, scope, n); hidden > 0 {
+					out["hidden"], out["hidden_ids"] = hidden, ids
 				}
 				if replies != client.RepliesNone {
 					out["replies"] = emptyIfNil(reps)
@@ -1007,16 +1073,23 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 				return
 			}
-			if v := s.upgradeFor(r); v != "" {
-				out := map[string]any{"upgrade_available": v}
-				out["waiting"], out["queued"] = 0, 0
-				writeJSON(w, http.StatusOK, out)
-			} else {
+			v := s.upgradeFor(r)
+			hidden, ids := s.hiddenQueued(r.Context(), name, scope, 0)
+			if v == "" && hidden == 0 {
 				w.WriteHeader(http.StatusNoContent)
+				return
 			}
+			out := map[string]any{"waiting": 0, "queued": 0}
+			if v != "" {
+				out["upgrade_available"] = v
+			}
+			if hidden > 0 {
+				out["hidden"], out["hidden_ids"] = hidden, ids
+			}
+			writeJSON(w, http.StatusOK, out)
 			return
 		}
-		reqs, err := s.store.Deliver(r.Context(), name, 20, s.cfg.DeliveryLease)
+		reqs, err := s.store.DeliverFor(r.Context(), name, scope, 20, s.cfg.DeliveryLease)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err)
 			return
@@ -1186,6 +1259,46 @@ func (s *Server) touchSession(agent, session string) {
 	}
 }
 
+// touchProject records that one of agent's sessions advertising label called
+// the relay now, and forgets the agent's labels quiet past SessionGrace.
+func (s *Server) touchProject(agent, label string) {
+	if label == "" {
+		return
+	}
+	now := s.cfg.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.projects[agent]
+	if m == nil {
+		m = map[string]time.Time{}
+		s.projects[agent] = m
+	}
+	m[label] = now
+	for k, t := range m {
+		if now.Sub(t) >= SessionGrace {
+			delete(m, k)
+		}
+	}
+}
+
+// hiddenQueued is how many of agent's queued requests a peek that saw seen of
+// them left out for naming another project, and up to MaxPeekPending of their
+// ids, so a client can tell a request still queued from one that left. Fewer
+// ids than the count tells it the list is not complete. A failed count reads
+// as none: the peek still reports what it saw.
+func (s *Server) hiddenQueued(ctx context.Context, agent string, scope store.QueueScope, seen int) (int, []string) {
+	total, _, err := s.store.CountQueuedWithPings(ctx, agent)
+	if err != nil {
+		log.Printf("peek: count queued: %v", err)
+		return 0, nil
+	}
+	ids, err := s.store.HiddenIDsFor(ctx, agent, scope, MaxPeekPending)
+	if err != nil {
+		log.Printf("peek: list hidden: %v", err)
+	}
+	return max(total-seen, len(ids)), ids
+}
+
 // noteSocketWake records whether agent's session advertised socket wake on
 // a poll at now, and forgets the agent's socket-wake sessions quiet past
 // SessionGrace. The caller holds s.mu.
@@ -1254,6 +1367,18 @@ func session(r *http.Request) (string, error) {
 	return v, nil
 }
 
+// project returns the caller's ProjectHeader, "" when it sends none. Like a
+// session, a label only routes inside the caller's agent; identity still
+// comes from Server.agent alone. A malformed value is an error rather than
+// ignored, so a bad label does not look like routing failing.
+func project(r *http.Request) (string, error) {
+	v := r.Header.Get(client.ProjectHeader)
+	if err := envelope.ValidProject(v); err != nil {
+		return "", fmt.Errorf("%s: %w", client.ProjectHeader, err)
+	}
+	return v, nil
+}
+
 func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 	name := s.agent(w, r)
 	if name == "" {
@@ -1264,7 +1389,12 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	req, err := s.store.ClaimLeasesFrom(r.Context(), r.PathValue("id"), name, sess, s.cfg.ClaimLease, s.cfg.urgentLease())
+	label, err := project(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	req, err := s.store.ClaimLeasesFrom(r.Context(), r.PathValue("id"), name, sess, store.QueueScope{Project: label, Grace: SessionGrace}, s.cfg.ClaimLease, s.cfg.urgentLease())
 	if err != nil {
 		writeErr(w, statusFor(err), err)
 		return
@@ -1861,6 +1991,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.storedVersion, in.Name)
 	delete(s.versionWritten, in.Name)
 	delete(s.sessions, in.Name)
+	delete(s.projects, in.Name)
 	delete(s.socketWake, in.Name)
 	delete(s.workingOn, in.Name)
 	delete(s.hostStatus, in.Name)

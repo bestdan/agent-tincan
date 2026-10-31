@@ -124,6 +124,30 @@ type Request struct {
 	// FromSession is the sender's session label (SessionHeader), a
 	// relay-only routing label inside one agent, never an identity.
 	FromSession string `json:"-"`
+	// Project names the project of the session this request is for, a
+	// routing label inside the target agent (see ValidProject), never an
+	// identity. A relay that predates it ignores the field, and the request
+	// goes to any session. The relay drops it when the request moves to
+	// another target.
+	Project string `json:"project,omitempty"`
+}
+
+// MaxProject bounds a project label.
+const MaxProject = 64
+
+// ValidProject reports whether label is a usable project label: lowercase
+// letters, digits, '.', '_' and '-', up to MaxProject bytes. "" names no
+// project.
+func ValidProject(label string) error {
+	if len(label) > MaxProject {
+		return fmt.Errorf("project is longer than %d bytes", MaxProject)
+	}
+	for _, c := range label {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '.' && c != '_' && c != '-' {
+			return errors.New("project may use only lowercase letters, digits, '.', '_', and '-'")
+		}
+	}
+	return nil
 }
 
 // RedactFor hides content that the owner has never released to other agents.
@@ -131,6 +155,7 @@ func (r *Request) RedactFor(agent string) {
 	if r.WasHeld && !r.Approved && r.From != agent {
 		r.Body = "waiting for the owner's approval"
 		r.Attachments = nil
+		r.Project = ""
 	}
 }
 
@@ -308,7 +333,20 @@ type Target struct {
 	// within one poll hold plus slack. It differs from AgentInfo's online
 	// for the same reason.
 	Listening bool `json:"listening,omitempty"`
+
+	// ProjectMatch answers a send that named a project: ProjectLive when a
+	// session of that project called the relay within the session grace,
+	// ProjectNone when none did, so the request waits for the fallback. It
+	// is empty on any other send, from a relay that predates projects, and
+	// from one too newly started to know its sessions.
+	ProjectMatch string `json:"project_match,omitempty"`
 }
+
+// The values of Target.ProjectMatch.
+const (
+	ProjectLive = "live"
+	ProjectNone = "none"
+)
 
 // WakeViaSocket is Target.WakeVia for a recipient one of whose sessions
 // wakes through its own messaging socket.
@@ -380,6 +418,7 @@ type sendInput struct {
 	Kind        Kind         `json:"kind"`
 	ParentID    string       `json:"parent_id"`
 	Attachments []Attachment `json:"attachments"`
+	Project     string       `json:"project"`
 }
 
 // ParseSend decodes a client's send and attributes it to sender, the agent
@@ -416,11 +455,19 @@ func ParseSend(raw []byte, sender string, maxBody int) (Request, error) {
 	default:
 		return Request{}, fmt.Errorf("send: unknown kind %q", in.Kind)
 	}
+	if err := ValidProject(in.Project); err != nil {
+		return Request{}, fmt.Errorf("send: %w", err)
+	}
+	if in.Kind == KindPing && in.Project != "" {
+		// A ping asks whether the agent answers at all; waiting for one
+		// session would only make a live agent look silent.
+		return Request{}, errors.New("send: a ping cannot name a project")
+	}
 	atts, err := attachmentIDs(in.Attachments)
 	if err != nil {
 		return Request{}, fmt.Errorf("send: %w", err)
 	}
-	return Request{Group: in.Group, Urgent: in.Urgent, From: sender, To: in.To, ParentID: in.ParentID, Kind: in.Kind, Body: in.Body, Attachments: atts}, nil
+	return Request{Group: in.Group, Urgent: in.Urgent, From: sender, To: in.To, ParentID: in.ParentID, Kind: in.Kind, Body: in.Body, Attachments: atts, Project: in.Project}, nil
 }
 
 // attachmentIDs keeps only the ids a client names, checking the count and

@@ -40,6 +40,13 @@ const VersionHeader = "X-Tincan-Version"
 // agent, never an identity. Old relays ignore it.
 const SessionHeader = "X-Tincan-Session"
 
+// ProjectHeader names the project the calling session works in, so an ask
+// naming that project reaches it before the agent's other sessions. It is a
+// routing label like SessionHeader, never an identity. Optional: a client
+// that sends none takes such an ask after the fallback, and a relay that
+// predates it ignores it.
+const ProjectHeader = "X-Tincan-Project"
+
 // FeaturesHeader advertises capabilities supported by this client.
 const FeaturesHeader = "X-Tincan-Features"
 
@@ -303,6 +310,7 @@ type Relay struct {
 	agent    string // sent as AgentHeader when set
 	version  string // sent as VersionHeader when set
 	session  string // sent as SessionHeader when set
+	project  string // sent as ProjectHeader when set
 	// socketWake adds SocketWakeFeature to FeaturesHeader. It is atomic
 	// because the socket-wake loop flips it while other calls are in flight.
 	socketWake atomic.Bool
@@ -514,6 +522,9 @@ func (r *Relay) GroupMembers(ctx context.Context, group string) ([]envelope.Grou
 type sent = envelope.SendResponse
 
 func (r *Relay) send(ctx context.Context, in map[string]any) (sent, error) {
+	if project := projectOf(ctx); project != "" {
+		in["project"] = project
+	}
 	var out sent
 	err := r.call(ctx, r.api, "POST", "/v1/send", in, &out)
 	if err == nil {
@@ -616,6 +627,14 @@ type Waiting struct {
 	// Pending names the oldest queued requests (id and sender, no body).
 	// A relay that predates it leaves it empty.
 	Pending []envelope.Pending `json:"pending,omitempty"`
+	// Hidden counts queued requests left out because they name another
+	// project, so this peek does not show the agent's whole queue. A relay
+	// that predates it leaves it zero.
+	Hidden int `json:"hidden,omitempty"`
+	// HiddenIDs names up to the first 50 of the Hidden requests, without
+	// bodies, so a peek can tell one of them from a request that left the
+	// queue.
+	HiddenIDs []string `json:"hidden_ids,omitempty"`
 }
 
 // Poll waits up to hold for requests addressed to this agent or unseen
@@ -1035,6 +1054,9 @@ func (r *Relay) headers(req *http.Request) {
 	if r.session != "" {
 		req.Header.Set(SessionHeader, r.session)
 	}
+	if r.project != "" {
+		req.Header.Set(ProjectHeader, r.project)
+	}
 }
 
 // SetSession names the session every later call comes from (SessionHeader);
@@ -1043,6 +1065,26 @@ func (r *Relay) SetSession(session string) { r.session = session }
 
 // Session is the session set by SetSession.
 func (r *Relay) Session() string { return r.session }
+
+// SetProject names the project every later call comes from (ProjectHeader);
+// "" names none. Set it before the client is shared between goroutines.
+func (r *Relay) SetProject(project string) { r.project = project }
+
+// projectKey carries the project a send names; see WithProject.
+type projectKey struct{}
+
+// WithProject returns a context whose sends name project: the ask is for a
+// session of that project. Every way of sending an ask (plain, attached,
+// notify, grouped) reads it, so none of them takes a parameter for it. ""
+// names none.
+func WithProject(ctx context.Context, project string) context.Context {
+	return context.WithValue(ctx, projectKey{}, project)
+}
+
+func projectOf(ctx context.Context) string {
+	project, _ := ctx.Value(projectKey{}).(string)
+	return project
+}
 
 // AdvertiseSocketWake turns SocketWakeFeature on or off for every later
 // call. It is safe to call while the client is in use.
@@ -1297,7 +1339,7 @@ func (r *Relay) SendGroup(ctx context.Context, targets []string, body string, ki
 	g := GroupResult{Group: newGroupID()}
 	for _, targetName := range targets {
 		var target *envelope.Target
-		req := envelope.Request{To: targetName, Body: body, Kind: kind, ParentID: parent, Group: g.Group, Urgent: urgent}
+		req := envelope.Request{To: targetName, Body: body, Kind: kind, ParentID: parent, Group: g.Group, Urgent: urgent, Project: projectOf(ctx)}
 		ups, err := r.UploadFiles(ctx, attachPaths)
 		if err == nil {
 			for _, up := range ups {

@@ -110,9 +110,11 @@ func (s *Store) Answer(ctx context.Context, id, agent, body string) (envelope.Re
 		return envelope.Request{}, err
 	}
 	now := s.now().UnixMilli()
-	res, err := tx.ExecContext(ctx, `UPDATE requests SET status = ?, exchanges = ?, lease_paused = 0, lease_until = 0, resumed = 1, updated_at = ?, reply_seen_at = ?,
+	// The asker's answer queues the request afresh, so its project gets the
+	// first look again rather than whichever window polls next.
+	res, err := tx.ExecContext(ctx, `UPDATE requests SET status = ?, exchanges = ?, lease_paused = 0, lease_until = 0, resumed = 1, updated_at = ?, reply_seen_at = ?, queued_at = ?, fallback_woken = 0,
 		progress_note = '', progress_at = 0
-		WHERE id = ? AND status = ? AND expires_at > ?`, envelope.StatusQueued, string(exchanges), now, now, id, envelope.StatusNeedsInput, now)
+		WHERE id = ? AND status = ? AND expires_at > ?`, envelope.StatusQueued, string(exchanges), now, now, now, id, envelope.StatusNeedsInput, now)
 	if err != nil {
 		return envelope.Request{}, err
 	}

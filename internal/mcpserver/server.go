@@ -141,6 +141,7 @@ type askIn struct {
 	Notify      bool     `json:"notify,omitempty" jsonschema:"true to send without expecting a reply"`
 	ParentID    string   `json:"parent_id,omitempty" jsonschema:"the request id you are handling, when this ask continues it"`
 	Attach      []string `json:"attach,omitempty" jsonschema:"local file paths to attach (images or small files, at most 8, 10 MB each)"`
+	Project     string   `json:"project,omitempty" jsonschema:"the project of the session this is for, usually its repo directory name, e.g. agent-tincan; that session gets it first, and any session of the teammate after about 10 minutes"`
 }
 
 type idIn struct {
@@ -265,6 +266,10 @@ func NewWithOptions(b Backend, version string, opts *mcp.ServerOptions, more ...
 
 	mcp.AddTool(s, &mcp.Tool{Name: "ask", Description: "Ask teammates to do something or answer something. Set also for additional targets (8 total); sending to several teammates at once is for questions, never for calls, payments or bookings. Waits up to wait_seconds and returns replies plus a request or group id to check with get_reply."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in askIn) (*mcp.CallToolResult, any, error) {
+			if err := envelope.ValidProject(in.Project); err != nil {
+				return fail(err)
+			}
+			ctx = client.WithProject(ctx, in.Project)
 			if len(in.Also) > 0 {
 				gb, ok := b.(groupBackend)
 				if !ok {
@@ -316,7 +321,7 @@ func NewWithOptions(b Backend, version string, opts *mcp.ServerOptions, more ...
 					if err != nil {
 						return fail(err)
 					}
-					return text(client.SignedOutHint(in.To, sent.Target) + notifyText(sent.Request))
+					return text(client.SignedOutHint(in.To, sent.Target) + client.ProjectHint(in.To, sent.Target) + notifyText(sent.Request))
 				}
 				req, err := b.Send(ctx, in.To, in.Message, envelope.KindNotify, in.ParentID, in.Urgent)
 				if err != nil {
@@ -641,7 +646,7 @@ func (f files) askAttached(ctx context.Context, in askIn) (*mcp.CallToolResult, 
 			if err != nil {
 				return fail(err)
 			}
-			return text(client.SignedOutHint(in.To, sent.Target) + notifyText(sent.Request))
+			return text(client.SignedOutHint(in.To, sent.Target) + client.ProjectHint(in.To, sent.Target) + notifyText(sent.Request))
 		}
 		req, err := f.att.SendAttached(ctx, in.To, in.Message, envelope.KindNotify, in.ParentID, ids, in.Urgent)
 		if err != nil {
