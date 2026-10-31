@@ -53,7 +53,9 @@ the tools can still run it from a shell.
 
 It checks, in order: the saved join, the relay, whether this binary is the
 relay's current release, on an admin device any webhook or email agent that
-was woken and has not checked in, a self-test of tincan mcp in both stdio framings,
+was woken and has not checked in, this machine's Tailscale (its version against
+the minimum, Tailscale SSH, and whether the machine is tagged), a self-test of
+tincan mcp in both stdio framings,
 the MCP config entries that point at tincan, whether the app has
 actually been starting tincan mcp (every tincan mcp records its launch),
 and whether a running tincan mcp is on a different build than this
@@ -158,6 +160,13 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 		add(webStatusCheck(ctx, r))
 		add(webLimitCheck(ctx, r, time.Now()))
 	}
+
+	// 2c. This host's Tailscale, which matters joined or not.
+	var joinedRelay *client.Relay
+	if joined {
+		joinedRelay = r
+	}
+	rep.Checks = append(rep.Checks, tailnetChecks(ctx, joinedRelay)...)
 
 	// 3. Self-test of tincan mcp in both framings.
 	if exe != "" {
