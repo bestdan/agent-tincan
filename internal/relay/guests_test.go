@@ -297,6 +297,82 @@ func TestScheduleRefusedDuringMarkedClaim(t *testing.T) {
 	}
 }
 
+// A claim is not the only way a guest's text reaches a teammate: poll shows
+// it before any claim, and a needs_input reply or a lapsed lease takes the
+// claim away while the ask stays open. A fire reads no claims, so a schedule
+// made in any of these would lose the mark for good, and nothing the teammate
+// does later brings it back. Only a held ask, which it has not seen, does not
+// count.
+func TestScheduleRefusedWhileMarkedAskOpen(t *testing.T) {
+	ask := client.ScheduledAsk{To: "instinct", Body: "pass it on", Every: time.Hour}
+	for name, tc := range map[string]func(t *testing.T, muse, g *client.Relay, req envelope.Request){
+		"queued": func(*testing.T, *client.Relay, *client.Relay, envelope.Request) {},
+		"delivered": func(t *testing.T, muse, _ *client.Relay, _ envelope.Request) {
+			if _, err := muse.Poll(t.Context(), 0); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"needs_input": func(t *testing.T, muse, _ *client.Relay, req envelope.Request) {
+			claimOne(t, muse, req.ID)
+			if _, err := muse.Reply(t.Context(), req.ID, "which one?", envelope.StatusNeedsInput); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"answered needs_input": func(t *testing.T, muse, g *client.Relay, req envelope.Request) {
+			claimOne(t, muse, req.ID)
+			if _, err := muse.Reply(t.Context(), req.ID, "which one?", envelope.StatusNeedsInput); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := g.Answer(t.Context(), req.ID, "the blue one"); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := testrelay.NewWithAdminLogin(t, relay.Config{})
+			g := m.JoinGuest(t, guestName, client.GuestInvite{Ask: []string{"muse"}, ForSeconds: guestFor, NoHold: true})
+			muse := m.Client(t, "muse")
+			req := guestAsk(t, g, "guest text")
+			tc(t, muse, g, req)
+			if _, err := client.ScheduleAsk(t.Context(), muse, ask); !client.IsStatus(err, http.StatusConflict) {
+				t.Fatalf("schedule = %v, want 409", err)
+			}
+			_, st, err := m.Store.Request(t.Context(), req.ID)
+			if err != nil || st == envelope.StatusClaimed {
+				t.Fatalf("status %s, %v: this case must not hold a claim", st, err)
+			}
+			if st == envelope.StatusNeedsInput {
+				if _, err := g.Answer(t.Context(), req.ID, "the blue one"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := muse.Poll(t.Context(), 0); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := muse.Claim(t.Context(), req.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := muse.Reply(t.Context(), req.ID, "done", envelope.StatusAnswered); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.ScheduleAsk(t.Context(), muse, ask); err != nil {
+				t.Fatalf("after the reply: %v", err)
+			}
+		})
+	}
+	t.Run("held", func(t *testing.T) {
+		m := testrelay.NewWithAdminLogin(t, relay.Config{})
+		g := m.JoinGuest(t, guestName, client.GuestInvite{Ask: []string{"muse"}, ForSeconds: guestFor})
+		req := guestAsk(t, g, "guest text")
+		if _, st, err := m.Store.Request(t.Context(), req.ID); err != nil || st != envelope.StatusHeld {
+			t.Fatalf("status %s, %v", st, err)
+		}
+		if _, err := client.ScheduleAsk(t.Context(), m.Client(t, "muse"), ask); err != nil {
+			t.Fatalf("an ask muse has not seen: %v", err)
+		}
+	})
+}
+
 // A fire is not the work of whatever the asker holds when it comes due. Its
 // text was fixed before the guest's ask existed and no route can change it,
 // so a marked claim held at fire time neither marks it nor holds it, and the

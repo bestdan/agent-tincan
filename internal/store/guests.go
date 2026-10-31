@@ -81,3 +81,15 @@ func (s *Store) OpenGuestClaims(ctx context.Context, agent string) (marked, unap
 		agent, string(envelope.StatusClaimed), string(envelope.KindAsk)).Scan(&marked, &unapproved)
 	return marked, unapproved, err
 }
+
+// OpenGuestAsks counts the asks a guest's ask led to that have reached agent
+// and are not finished: more than OpenGuestClaims, since poll shows an ask
+// before it is claimed and a needs_input reply or a lapsed lease leaves it
+// open with no claim. A held ask is left out, as agent has not seen it. The
+// send path must keep to OpenGuestClaims: counting a needs_input ask there
+// would let a guest hold a teammate's sends by never answering.
+func (s *Store) OpenGuestAsks(ctx context.Context, agent string) (open int, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM requests WHERE to_agent = ? AND status IN (?, ?, ?, ?) AND kind = ? AND from_guest = 1`,
+		agent, string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed), string(envelope.StatusNeedsInput), string(envelope.KindAsk)).Scan(&open)
+	return open, err
+}

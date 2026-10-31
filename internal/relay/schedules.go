@@ -30,15 +30,15 @@ const (
 // request would shed that request's loop, hop and allowlist checks.
 var errScheduleDuringClaim = errors.New("you hold a claimed request and a scheduled ask starts a new chain; reply to it first, or send an ordinary ask")
 
+// errScheduleDuringGuestAsk refuses a schedule from a caller a guest's ask is
+// open with. A fire carries no mark and reads no claims, so one made now,
+// claimed or not, would go out as the caller's own work for good.
+var errScheduleDuringGuestAsk = errors.New("you have an open request that a guest's ask led to, and a scheduled ask would not carry its mark; finish that request first, or send an ordinary ask")
+
 // holdsClaim reports whether a send from agent in session would continue a
 // claim, the way policy.Prepare decides it: the session's own claim, or else
-// the agent-wide one, which a session cannot step out of. A claim a guest's
-// ask led to counts however many others agent holds, as it does for the mark
-// on a send, because a fire carries no mark and would shed it.
+// the agent-wide one, which a session cannot step out of.
 func (s *Server) holdsClaim(ctx context.Context, agent, session string) (bool, error) {
-	if marked, _, err := s.store.OpenGuestClaims(ctx, agent); marked > 0 || err != nil {
-		return marked > 0, err
-	}
 	if session != "" {
 		if _, ok, err := s.store.OpenClaimFor(ctx, agent, session); ok || err != nil {
 			return ok, err
@@ -110,6 +110,13 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	sess, err := session(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if open, err := s.store.OpenGuestAsks(r.Context(), from); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	} else if open > 0 {
+		writeErr(w, http.StatusConflict, errScheduleDuringGuestAsk)
 		return
 	}
 	if held, err := s.holdsClaim(r.Context(), from, sess); err != nil {
