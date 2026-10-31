@@ -270,14 +270,38 @@ func (d *Directory) Resolve(ctx context.Context, remoteAddr, claimed string) (st
 // carries no agent, or not the claimed one, it tries to re-admit the node as
 // a rebuilt machine before refusing.
 func (d *Directory) ResolveAgent(ctx context.Context, remoteAddr, claimed string) (Resolved, error) {
-	n, err := d.who.WhoIs(ctx, remoteAddr)
+	c, err := d.Caller(ctx, remoteAddr)
 	if err != nil {
 		return Resolved{}, err
+	}
+	return d.ResolveCaller(ctx, c, claimed)
+}
+
+// Caller is one read of who is behind a call: its node and the node's agents.
+// The relay takes it once per call, so its guest gate and its handler judge
+// the same caller and a join landing between them changes neither.
+type Caller struct {
+	Node   Node
+	Agents []Agent
+}
+
+// Caller reads the caller behind remoteAddr. It changes nothing, so it is
+// safe to call ahead of the real resolve.
+func (d *Directory) Caller(ctx context.Context, remoteAddr string) (Caller, error) {
+	n, err := d.who.WhoIs(ctx, remoteAddr)
+	if err != nil {
+		return Caller{}, err
 	}
 	agents, err := d.store.AgentsByNode(ctx, n.ID)
 	if err != nil {
-		return Resolved{}, err
+		return Caller{}, err
 	}
+	return Caller{Node: n, Agents: agents}, nil
+}
+
+// ResolveCaller is ResolveAgent on a caller already read.
+func (d *Directory) ResolveCaller(ctx context.Context, c Caller, claimed string) (Resolved, error) {
+	n, agents := c.Node, c.Agents
 	if claimed != "" {
 		for _, a := range agents {
 			if a.Name == claimed {
@@ -641,32 +665,23 @@ func carriesGuest(agents []Agent) bool {
 	return slices.ContainsFunc(agents, func(a Agent) bool { return a.Guest.Set() })
 }
 
-// GuestCaller finds the guest behind remoteAddr: a node carrying a guest is a
-// guest's node for every call, whatever the call claims. guest is true when
-// the node carries one, and then a failure means the claim named no guest of
-// this node, or named none on a node with several. It never re-admits a
-// machine, so it is safe to call ahead of the real resolve.
-func (d *Directory) GuestCaller(ctx context.Context, remoteAddr, claimed string) (a Agent, guest bool, err error) {
-	n, err := d.who.WhoIs(ctx, remoteAddr)
-	if err != nil {
-		return Agent{}, false, err
-	}
-	agents, err := d.store.AgentsByNode(ctx, n.ID)
-	if err != nil {
-		return Agent{}, false, err
-	}
-	if !carriesGuest(agents) {
+// Guest finds the guest behind c: a node carrying a guest is a guest's node
+// for every call, whatever the call claims. guest is true when the node
+// carries one, and then a failure means the claim named no guest of this
+// node, or named none on a node with several.
+func (c Caller) Guest(claimed string) (a Agent, guest bool, err error) {
+	if !carriesGuest(c.Agents) {
 		return Agent{}, false, nil
 	}
-	if claimed == "" && len(agents) > 1 {
-		return Agent{}, true, fmt.Errorf("%s runs %s: %w", n.Name, strings.Join(agentNames(agents), ", "), ErrAgentAmbiguous)
+	if claimed == "" && len(c.Agents) > 1 {
+		return Agent{}, true, fmt.Errorf("%s runs %s: %w", c.Node.Name, strings.Join(agentNames(c.Agents), ", "), ErrAgentAmbiguous)
 	}
-	for _, a := range agents {
+	for _, a := range c.Agents {
 		if a.Guest.Set() && (claimed == "" || a.Name == claimed) {
 			return a, true, nil
 		}
 	}
-	return Agent{}, true, fmt.Errorf("%s is not %q: %w", n.Name, claimed, ErrNotJoined)
+	return Agent{}, true, fmt.Errorf("%s is not %q: %w", c.Node.Name, claimed, ErrNotJoined)
 }
 
 // NodeLookup is an optional Resolver extension that finds a tailnet node

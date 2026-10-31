@@ -123,6 +123,30 @@ func guestOf(ctx context.Context) (identity.Agent, bool) {
 	return a, ok
 }
 
+// callerKey is the context key of the gate's read of the caller.
+const callerKey ctxKey = 4
+
+// gateCaller is the gate's read of the caller, or why it failed.
+type gateCaller struct {
+	caller identity.Caller
+	err    error
+}
+
+// resolve finds the agent behind r from the gate's read, so that a guest
+// whose join lands after the gate passed this call as a non-guest's is not
+// served as a guest with none of a guest's limits. Only the local admin
+// socket, which has no gate, reads the caller here.
+func (s *Server) resolve(r *http.Request) (identity.Resolved, error) {
+	claimed := r.Header.Get(client.AgentHeader)
+	if g, ok := r.Context().Value(callerKey).(gateCaller); ok {
+		if g.err != nil {
+			return identity.Resolved{}, g.err
+		}
+		return s.dir.ResolveCaller(r.Context(), g.caller, claimed)
+	}
+	return s.dir.ResolveAgent(r.Context(), r.RemoteAddr, claimed)
+}
+
 // errGuestRoute and errGuestEnded are a guest's refusals at the gate.
 var (
 	errGuestRoute = errors.New("guests may not use this route")
@@ -134,13 +158,19 @@ var (
 // handler sees a guest it was not written for, including handlers that never
 // call Server.agent. Past its term a guest gets 403 from every route at once,
 // without waiting for the sweep. Every call from a node carrying a guest is
-// a guest's. A caller the gate cannot place is refused, since each handler
-// asks again and a guest must not slip through on a transient failure; only
-// routes that say nothing about any caller stay open to it.
+// a guest's. Its read of the caller is the only one the call gets, so the
+// handler judges the same caller it did (see resolve). A caller the gate
+// cannot place is refused, since it may be a guest; only routes that say
+// nothing about any caller stay open to it.
 func (s *Server) guestGate(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, pattern := mux.Handler(r)
-		g, guest, err := s.dir.GuestCaller(r.Context(), r.RemoteAddr, r.Header.Get(client.AgentHeader))
+		c, err := s.dir.Caller(r.Context(), r.RemoteAddr)
+		var g identity.Agent
+		guest := false
+		if err == nil {
+			g, guest, err = c.Guest(r.Header.Get(client.AgentHeader))
+		}
 		switch {
 		case err != nil && !guest && callerFreeRoutes[pattern]:
 		case err != nil:
@@ -154,10 +184,11 @@ func (s *Server) guestGate(mux *http.ServeMux) http.Handler {
 			writeErr(w, http.StatusForbidden, errGuestRoute)
 			return
 		}
+		ctx := context.WithValue(r.Context(), callerKey, gateCaller{c, err})
 		if guest {
-			r = r.WithContext(context.WithValue(r.Context(), guestKey, g))
+			ctx = context.WithValue(ctx, guestKey, g)
 		}
-		mux.ServeHTTP(w, r)
+		mux.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

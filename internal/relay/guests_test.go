@@ -1333,3 +1333,83 @@ func TestGuestGetsNoUpgradeNotice(t *testing.T) {
 		t.Fatalf("whoami = %v", out)
 	}
 }
+
+// joinRace lands a join right after the relay's read of a node's agents, the
+// moment a call from that node has been read as unjoined.
+type joinRace struct {
+	identity.Store
+	mu   sync.Mutex
+	node string
+	land func()
+}
+
+func (j *joinRace) arm(node string, land func()) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.node, j.land = node, land
+}
+
+func (j *joinRace) AgentsByNode(ctx context.Context, node string) ([]identity.Agent, error) {
+	agents, err := j.Store.AgentsByNode(ctx, node)
+	j.mu.Lock()
+	land := j.land
+	if node != j.node {
+		land = nil
+	}
+	if land != nil {
+		j.land = nil
+	}
+	j.mu.Unlock()
+	if land != nil {
+		land()
+	}
+	return agents, err
+}
+
+// A call that began before its machine joined as a guest is refused on every
+// route, not served as a guest with none of a guest's limits. friend may ask
+// only muse, and with --no-hold nothing else stands between it and grokbot.
+func TestCallRacingAGuestJoinGetsNoGuestAccess(t *testing.T) {
+	for name, call := range map[string]struct {
+		method, path string
+		in           any
+	}{
+		"send to an unlisted teammate": {"POST", "/v1/send", map[string]string{"to": "grokbot", "body": "hello"}},
+		"send with a closed field":     {"POST", "/v1/send", map[string]any{"to": "muse", "body": "hello", "urgent": true}},
+		"roster":                       {"GET", "/v1/agents", nil},
+		"route closed to a guest":      {"PUT", "/v1/agents/self/working-on", map[string]string{"text": "hello"}},
+	} {
+		for _, claim := range []string{"", guestName} {
+			t.Run(name+" as "+claim, func(t *testing.T) {
+				race := &joinRace{}
+				m := testrelay.NewWithIdentityStore(t, relay.Config{}, func(st identity.Store) identity.Store {
+					race.Store = st
+					return race
+				})
+				inv, err := m.Client(t, "admin").InviteGuest(t.Context(), guestName, client.GuestInvite{Ask: []string{"muse"}, ForSeconds: guestFor, NoHold: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				race.arm("nVISIT", func() {
+					if _, err := m.Client(t, "visitor").Join(t.Context(), inv.Code); err != nil {
+						t.Errorf("join: %v", err)
+					}
+				})
+				c, err := client.NewRelayFor(client.Config{Relay: m.URL("visitor"), Agent: claim})
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.SetSession("window-1")
+				if err := c.Raw(t.Context(), call.method, call.path, call.in, nil); !client.IsStatus(err, http.StatusForbidden) {
+					t.Errorf("racing call = %v, want 403", err)
+				}
+				if a, ok, err := m.Dir.Agent(t.Context(), guestName); err != nil || !ok || !a.Guest.Set() {
+					t.Fatalf("the join did not land: %+v, %v, %v", a, ok, err)
+				}
+				if n, _, err := m.Store.CountQueuedWithPings(t.Context(), "grokbot"); err != nil || n != 0 {
+					t.Fatalf("grokbot has %d queued, %v", n, err)
+				}
+			})
+		}
+	}
+}

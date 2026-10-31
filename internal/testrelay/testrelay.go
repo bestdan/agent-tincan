@@ -37,15 +37,21 @@ type Mesh struct {
 var addrs = map[string]string{"grokbot": "100.0.0.2:1", "instinct": "100.0.0.3:1", "muse": "100.0.0.4:1", "admin": "100.0.0.1:1", "stranger": "100.0.0.9:1", "visitor": "100.0.0.8:1"}
 
 // New starts the mesh.
-func New(t *testing.T, cfg relay.Config) *Mesh { return start(t, cfg, nil) }
+func New(t *testing.T, cfg relay.Config) *Mesh { return start(t, cfg, nil, nil) }
 
 // NewWithAdminLogin starts the mesh on a relay run with --admin-login Login,
 // which a relay needs before it invites a guest.
 func NewWithAdminLogin(t *testing.T, cfg relay.Config) *Mesh {
-	return start(t, cfg, []string{Login})
+	return start(t, cfg, []string{Login}, nil)
 }
 
-func start(t *testing.T, cfg relay.Config, adminLogins []string) *Mesh {
+// NewWithIdentityStore is NewWithAdminLogin with the directory's store passed
+// through wrap, so a test can land a write between two of the relay's reads.
+func NewWithIdentityStore(t *testing.T, cfg relay.Config, wrap func(identity.Store) identity.Store) *Mesh {
+	return start(t, cfg, []string{Login}, wrap)
+}
+
+func start(t *testing.T, cfg relay.Config, adminLogins []string, wrap func(identity.Store) identity.Store) *Mesh {
 	t.Helper()
 	st, err := store.Open(":memory:")
 	if err != nil {
@@ -60,7 +66,11 @@ func start(t *testing.T, cfg relay.Config, adminLogins []string) *Mesh {
 		addrs["stranger"]: {ID: "nLAPTOP", Name: "old-laptop", User: Login},
 		addrs["visitor"]:  {ID: "nVISIT", Name: "friends-laptop", User: GuestLogin},
 	})
-	dir := identity.NewDirectory(st, identity.WithVirtual(who), identity.Config{Admins: []string{"macbook-pro-44"}, AdminLogins: adminLogins})
+	var ids identity.Store = st
+	if wrap != nil {
+		ids = wrap(st)
+	}
+	dir := identity.NewDirectory(ids, identity.WithVirtual(who), identity.Config{Admins: []string{"macbook-pro-44"}, AdminLogins: adminLogins})
 	srv := relay.New(dir, st, cfg)
 	srv.SetPreparer(policy.New(st, policy.Config{}))
 	m := &Mesh{Server: srv, Store: st, Dir: dir, Who: who, urls: map[string]string{}, addrs: map[string]string{}, h: srv.Handler()}

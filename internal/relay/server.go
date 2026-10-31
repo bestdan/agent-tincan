@@ -604,7 +604,7 @@ func (s *Server) remote(r *http.Request) string {
 // agents and is refused for a name bound elsewhere. A rebuilt machine that the
 // directory re-admits on the way is audited as a "rebind".
 func (s *Server) agent(w http.ResponseWriter, r *http.Request) string {
-	res, err := s.dir.ResolveAgent(r.Context(), r.RemoteAddr, r.Header.Get(client.AgentHeader))
+	res, err := s.resolve(r)
 	if err != nil {
 		code := http.StatusForbidden
 		if errors.Is(err, identity.ErrRebindCheckFailed) {

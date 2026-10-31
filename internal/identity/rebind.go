@@ -138,6 +138,11 @@ func (d *Directory) readmitCandidate(ctx context.Context, n Node, claimed string
 	var matches []Agent
 	for _, a := range all {
 		if a.NodeID == n.ID {
+			// A guest joined this node after the caller was read, so the
+			// call was not judged as a guest's and cannot become one.
+			if a.Guest.Set() {
+				return nil, Resolved{}, false, nil
+			}
 			// A concurrent request re-admitted this node first.
 			if claimed == "" || a.Name == claimed {
 				return nil, Resolved{Name: a.Name}, true, nil
