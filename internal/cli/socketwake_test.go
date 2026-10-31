@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -571,20 +572,20 @@ func TestSocketWakeOlderPeekKeepsNewerDelivery(t *testing.T) {
 	if err := os.MkdirAll(shared.dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := shared.write(map[string]time.Time{pendingKey("r1"): saved}); err != nil {
+	if err := shared.write(map[string]time.Time{pendingKey(envelope.Pending{ID: "r1"}): saved}); err != nil {
 		t.Fatal(err)
 	}
 	w := newFakeWindow()
 	if _, err := pushShared(t.Context(), w, client.Waiting{}, shared, peekedAt); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := shared.read()[pendingKey("r1")]; !ok {
+	if _, ok := shared.read()[pendingKey(envelope.Pending{ID: "r1"})]; !ok {
 		t.Fatal("an empty peek taken before the delivery deleted it")
 	}
 	if _, err := pushShared(t.Context(), w, client.Waiting{}, shared, saved.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := shared.read()[pendingKey("r1")]; ok {
+	if _, ok := shared.read()[pendingKey(envelope.Pending{ID: "r1"})]; ok {
 		t.Fatal("an empty peek taken after the delivery kept it")
 	}
 }
@@ -659,7 +660,7 @@ func TestSocketWakeHiddenRequestKeepsDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved := time.Now()
-	if err := shared.write(map[string]time.Time{pendingKey("r1"): saved}); err != nil {
+	if err := shared.write(map[string]time.Time{pendingKey(envelope.Pending{ID: "r1"}): saved}); err != nil {
 		t.Fatal(err)
 	}
 	var peek client.Waiting
@@ -671,13 +672,13 @@ func TestSocketWakeHiddenRequestKeepsDelivery(t *testing.T) {
 	if _, err := pushShared(t.Context(), w, peek, shared, later); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := shared.read()[pendingKey("r1")]; !ok {
+	if _, ok := shared.read()[pendingKey(envelope.Pending{ID: "r1"})]; !ok {
 		t.Fatal("a peek that hid a request deleted its delivery")
 	}
 	if _, err := pushShared(t.Context(), w, client.Waiting{}, shared, later); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := shared.read()[pendingKey("r1")]; ok {
+	if _, ok := shared.read()[pendingKey(envelope.Pending{ID: "r1"})]; ok {
 		t.Fatal("a peek of the whole queue kept a request that left it")
 	}
 }
@@ -691,7 +692,7 @@ func TestSocketWakeHiddenIDsSeparateDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved := time.Now()
-	if err := shared.write(map[string]time.Time{pendingKey("theirs"): saved, pendingKey("gone"): saved}); err != nil {
+	if err := shared.write(map[string]time.Time{pendingKey(envelope.Pending{ID: "theirs"}): saved, pendingKey(envelope.Pending{ID: "gone"}): saved}); err != nil {
 		t.Fatal(err)
 	}
 	w := newFakeWindow()
@@ -700,7 +701,7 @@ func TestSocketWakeHiddenIDsSeparateDeliveries(t *testing.T) {
 	if _, err := pushShared(t.Context(), w, capped, shared, later); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := shared.read()[pendingKey("gone")]; !ok {
+	if _, ok := shared.read()[pendingKey(envelope.Pending{ID: "gone"})]; !ok {
 		t.Fatal("a peek with a capped hidden list deleted a delivery")
 	}
 	whole := client.Waiting{Hidden: 1, HiddenIDs: []string{"theirs"}}
@@ -708,10 +709,10 @@ func TestSocketWakeHiddenIDsSeparateDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := shared.read()
-	if _, ok := rec[pendingKey("theirs")]; !ok {
+	if _, ok := rec[pendingKey(envelope.Pending{ID: "theirs"})]; !ok {
 		t.Fatal("a peek deleted the delivery of a request it hid")
 	}
-	if _, ok := rec[pendingKey("gone")]; ok {
+	if _, ok := rec[pendingKey(envelope.Pending{ID: "gone"})]; ok {
 		t.Fatal("a peek that named every queued request kept one that left")
 	}
 	if n := w.count(); n != 0 {
@@ -787,5 +788,54 @@ func TestSocketWakeAnnouncesRequeuedRequestBesideHidden(t *testing.T) {
 	got := waitPushes(t, wa.recordPusher, 2)
 	if len(got) != 2 || got[1]["request_ids"] != req.ID {
 		t.Fatalf("pushes after the answer = %v, want the request announced again", got)
+	}
+}
+
+// A return to the queue is announced even when the hidden list is capped
+// and so cannot show the old record is stale.
+func TestSocketWakeAnnouncesRequeuedRequestPastHiddenCap(t *testing.T) {
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	if err := shared.write(map[string]time.Time{pendingKey(envelope.Pending{ID: "r1", Rev: 100}): time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	hidden := make([]string, relay.MaxPeekPending)
+	for i := range hidden {
+		hidden[i] = fmt.Sprintf("hidden-%d", i)
+	}
+	w := client.Waiting{
+		Total:     1,
+		Queued:    1,
+		Pending:   []envelope.Pending{{ID: "r1", From: "grokbot", Kind: envelope.KindAsk, Rev: 200}},
+		Hidden:    len(hidden) + 1,
+		HiddenIDs: hidden,
+	}
+	p := newFakeWindow()
+	wrote, err := pushShared(t.Context(), p, w, shared, time.Now())
+	if err != nil || !wrote {
+		t.Fatalf("pushShared = %v, %v", wrote, err)
+	}
+	if got := p.pushes(); len(got) != 1 || got[0]["request_ids"] != "r1" {
+		t.Fatalf("pushes = %v", got)
+	}
+	// The same return is one delivery.
+	wrote, err = pushShared(t.Context(), p, w, shared, time.Now())
+	if err != nil || wrote {
+		t.Fatalf("second pushShared = %v, %v", wrote, err)
+	}
+}
+
+// A hidden request's record stands under its rev, which the id-only hidden
+// list does not name.
+func TestSocketWakeHiddenRecordKeepsRev(t *testing.T) {
+	shared := socketShared{dir: t.TempDir(), agent: "muse"}
+	if err := shared.write(map[string]time.Time{pendingKey(envelope.Pending{ID: "r1", Rev: 100}): time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	w := client.Waiting{Hidden: 1, HiddenIDs: []string{"r1"}}
+	if _, err := pushShared(t.Context(), newFakeWindow(), w, shared, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := shared.read()[pendingKey(envelope.Pending{ID: "r1", Rev: 100})]; !ok {
+		t.Fatal("record of a hidden request was forgotten")
 	}
 }

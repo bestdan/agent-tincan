@@ -1115,7 +1115,7 @@ func (s *Store) pendingRequests(ctx context.Context, agent string, scope QueueSc
 	now := at.UnixMilli()
 	filter, filterArgs := scope.filter(at)
 	args := append(append([]any{agent, string(envelope.StatusQueued), now, now, string(envelope.KindPing)}, filterArgs...), limit)
-	rows, err := s.db.QueryContext(ctx, `SELECT id, from_agent, kind, urgent FROM requests
+	rows, err := s.db.QueryContext(ctx, `SELECT id, from_agent, kind, urgent, updated_at FROM requests
 		WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ? AND `+kindCond+filter+` ORDER BY urgent DESC, created_at, rowid LIMIT ?`, args...)
 	if err != nil {
 		return nil, err
@@ -1124,7 +1124,7 @@ func (s *Store) pendingRequests(ctx context.Context, agent string, scope QueueSc
 	var out []envelope.Pending
 	for rows.Next() {
 		var p envelope.Pending
-		if err := rows.Scan(&p.ID, &p.From, &p.Kind, &p.Urgent); err != nil {
+		if err := rows.Scan(&p.ID, &p.From, &p.Kind, &p.Urgent, &p.Rev); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

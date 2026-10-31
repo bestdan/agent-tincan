@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
+	"github.com/mvanhorn/agent-tincan/internal/envelope"
 )
 
 // socketTarget is a session pushSocket can wake: a pusher that also says
@@ -135,9 +136,22 @@ func splitOwn(r *client.Relay, w client.Waiting) (mine []client.Result, rest cli
 // pendingKey and replyKey name one delivery of an item. A request that is
 // queued again (a clarification answered, or a lease that ran out) is the
 // same request, and an answer it gets again is a new reply generation, so
-// each needs its own turn: the request key is forgotten once the request
-// leaves the queue, and the reply key carries its generation.
-func pendingKey(id string) string { return "q:" + id }
+// each needs its own turn: the request key carries the relay's rev for that
+// return, and the reply key carries its generation. A relay that predates
+// rev sends none, so its request key is only forgotten once the request
+// leaves the queue.
+func pendingKey(p envelope.Pending) string {
+	if p.Rev == 0 {
+		return "q:" + p.ID
+	}
+	return fmt.Sprintf("q:%s@%d", p.ID, p.Rev)
+}
+
+// pendingKeyID returns the request id of a pendingKey.
+func pendingKeyID(k string) string {
+	id, _, _ := strings.Cut(strings.TrimPrefix(k, "q:"), "@")
+	return id
+}
 
 func replyKey(rep client.Result) string {
 	gen := int64(0)
@@ -246,15 +260,16 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	legacy := len(w.Pending) == 0 && w.Queued > 0
 	listed := map[string]bool{}
 	for _, p := range w.Pending {
-		listed[pendingKey(p.ID)] = true
+		listed[pendingKey(p)] = true
 	}
 	if legacy {
 		listed[countKey(w.Queued)] = true
 	}
+	// Named for another window's project and still queued: that window's
+	// push of it must stand, under whatever rev it saw.
+	hidden := map[string]bool{}
 	for _, id := range w.HiddenIDs {
-		// Named for another window's project and still queued: that window's
-		// push of it must stand.
-		listed[pendingKey(id)] = true
+		hidden[id] = true
 	}
 	for _, rep := range w.Replies {
 		listed[replyKey(rep)] = true
@@ -265,6 +280,11 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	changed := false
 	for k, at := range rec {
 		switch {
+		case hidden[pendingKeyID(k)] && strings.HasPrefix(k, "q:"):
+			if now.Sub(at) >= socketRecordKeep/2 {
+				rec[k] = now
+				changed = true
+			}
 		case listed[k] && strings.HasPrefix(k, "q#"):
 			// A count key names no request, so a new request can bring back
 			// a count already announced. Do not keep it past socketRecordKeep.
@@ -287,9 +307,9 @@ func pushShared(ctx context.Context, t socketTarget, w client.Waiting, shared so
 	var fresh client.Waiting
 	var keys []string
 	for _, p := range w.Pending {
-		if _, done := rec[pendingKey(p.ID)]; !done {
+		if _, done := rec[pendingKey(p)]; !done {
 			fresh.Pending = append(fresh.Pending, p)
-			keys = append(keys, pendingKey(p.ID))
+			keys = append(keys, pendingKey(p))
 		}
 	}
 	fresh.Queued = len(fresh.Pending)
