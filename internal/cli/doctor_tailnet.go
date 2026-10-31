@@ -27,6 +27,7 @@ const (
 	roleUnknown deviceRole = iota
 	roleAdmin
 	roleAgent
+	roleGuest
 )
 
 // deviceRoleOf asks the relay whether this is an admin device. Only a 403 is
@@ -48,8 +49,11 @@ func deviceRoleOf(ctx context.Context, r *client.Relay) deviceRole {
 // there is none to ask. r is the joined relay, nil before a join. The relay
 // answers for the node that reached it. With several tailscaleds running that
 // could be any of them, and through a remote proxy it is the proxy's node, so
-// it is asked only when one is running and no remote proxy is in the way.
-func tailnetChecks(ctx context.Context, r *client.Relay) []check {
+// it is asked only when one is running and no remote proxy is in the way. A
+// guest need not ask: the relay refuses it the admin route as it does an
+// agent, but its machine is on another account's tailnet, out of the owner's
+// tag rule.
+func tailnetChecks(ctx context.Context, r *client.Relay, guest bool) []check {
 	selves := tailnetSelves(ctx)
 	if len(selves) == 0 {
 		return []check{{"tailnet", "ok", "skipped: no tailscaled tincan can reach on this machine", ""}}
@@ -61,7 +65,10 @@ func tailnetChecks(ctx context.Context, r *client.Relay) []check {
 		}
 	}
 	role := roleUnknown
-	if r != nil && running == 1 && !r.ThroughRemoteProxy() {
+	switch {
+	case guest:
+		role = roleGuest
+	case r != nil && running == 1 && !r.ThroughRemoteProxy():
 		role = deviceRoleOf(ctx, r)
 	}
 	checks := make([]check, len(selves))
@@ -115,6 +122,8 @@ func tailnetCheck(s client.TailnetSelf, role deviceRole) check {
 		detail = append(detail, "tagged "+strings.Join(s.Tags, ", "))
 	case role == roleAdmin:
 		detail = append(detail, "untagged, as an admin device is by design")
+	case role == roleGuest:
+		detail = append(detail, "untagged, which is fine for a guest: tags are for the owner's own machines")
 	case role == roleAgent:
 		warn("this agent machine is untagged",
 			"Tag it (for example tag:agent) in the Tailscale admin console: a tagged node is never an admin device, whatever it is called. See docs/trust-model.md.")

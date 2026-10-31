@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
+	"github.com/mvanhorn/agent-tincan/internal/relay"
+	"github.com/mvanhorn/agent-tincan/internal/testrelay"
 )
 
 func stubTailnet(t *testing.T, selves ...client.TailnetSelf) {
@@ -141,7 +143,7 @@ func TestTailnetCheckNeverFails(t *testing.T) {
 
 func TestTailnetChecksNoTailscale(t *testing.T) {
 	stubTailnet(t)
-	got := tailnetChecks(t.Context(), nil)
+	got := tailnetChecks(t.Context(), nil, false)
 	if len(got) != 1 || got[0].Name != "tailnet" || got[0].Status != "ok" || !strings.HasPrefix(got[0].Detail, "skipped:") || got[0].Fix != "" {
 		t.Fatalf("got %+v", got)
 	}
@@ -152,7 +154,7 @@ func TestTailnetChecksEachDaemon(t *testing.T) {
 	second := tailnetSelf("1.104.3", false, "tag:agent")
 	second.Socket = "/run/other/tailscaled.sock"
 	stubTailnet(t, tailnetSelf("1.104.4", false, "tag:agent"), second)
-	got := tailnetChecks(t.Context(), nil)
+	got := tailnetChecks(t.Context(), nil, false)
 	if len(got) != 2 || got[0].Status != "ok" || got[1].Status != "warn" || !strings.Contains(got[1].Detail, second.Socket) {
 		t.Fatalf("got %+v", got)
 	}
@@ -190,11 +192,40 @@ func TestTailnetChecksRole(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := tailnetChecks(t.Context(), r)
+			got := tailnetChecks(t.Context(), r, false)
 			if len(got) != 1 || got[0].Status != tc.status || !strings.Contains(got[0].Detail, tc.want) {
 				t.Fatalf("got %+v, want %s containing %q", got, tc.status, tc.want)
 			}
 		})
+	}
+}
+
+// A guest's machine is on its own account's tailnet, so the owner's tag rule
+// has nothing to say to it, though the relay refuses it the admin route as it
+// does any non-admin. The tag advice stays out of the report, and a real
+// problem on the machine still warns.
+func TestDoctorGuestIsNotToldToTag(t *testing.T) {
+	m := testrelay.NewWithAdminLogin(t, relay.Config{})
+	m.JoinGuest(t, "friend", client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600})
+	useConfig(t, client.Config{Relay: m.URL("friend"), Agent: "friend"})
+
+	tailnet := func() check {
+		t.Helper()
+		for _, c := range runDoctor(t.Context(), "", nil).Checks {
+			if c.Name == "tailnet" {
+				return c
+			}
+		}
+		t.Fatal("no tailnet check")
+		return check{}
+	}
+	stubTailnet(t, tailnetSelf("1.104.4", false))
+	if c := tailnet(); c.Status != "ok" || strings.Contains(c.Fix, "tag") || !strings.Contains(c.Detail, "guest") {
+		t.Fatalf("got %+v", c)
+	}
+	stubTailnet(t, tailnetSelf("1.104.3", false))
+	if c := tailnet(); c.Status != "warn" || strings.Contains(c.Fix, "tag:agent") {
+		t.Fatalf("got %+v", c)
 	}
 }
 
@@ -217,7 +248,7 @@ func TestTailnetChecksSeveralDaemonsSkipRole(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := tailnetChecks(t.Context(), r)
+			got := tailnetChecks(t.Context(), r, false)
 			if len(got) != 2 {
 				t.Fatalf("got %+v", got)
 			}
@@ -246,7 +277,7 @@ func TestTailnetChecksRoleForTheRunningDaemon(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := tailnetChecks(t.Context(), r)
+	got := tailnetChecks(t.Context(), r, false)
 	if len(got) != 2 || got[0].Status != "ok" || !strings.Contains(got[0].Detail, "tags unknown") ||
 		got[1].Status != "warn" || !strings.Contains(got[1].Detail, "untagged") {
 		t.Fatalf("got %+v", got)
@@ -267,7 +298,7 @@ func TestTailnetChecksRemoteProxySkipsRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := tailnetChecks(t.Context(), r)
+	got := tailnetChecks(t.Context(), r, false)
 	if len(got) != 1 || got[0].Status != "ok" || !strings.Contains(got[0].Detail, "tag check skipped") {
 		t.Fatalf("got %+v", got)
 	}
@@ -290,7 +321,7 @@ func TestTailnetChecksLoopbackProxyKeepsRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := tailnetChecks(t.Context(), r)
+	got := tailnetChecks(t.Context(), r, false)
 	if len(got) != 1 || got[0].Status != "warn" || !strings.Contains(got[0].Detail, "untagged") {
 		t.Fatalf("got %+v", got)
 	}

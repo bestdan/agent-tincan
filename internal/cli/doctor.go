@@ -96,7 +96,7 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 
 	// 1. Join and relay.
 	cfg, err := client.LoadConfig()
-	joined := false
+	joined, guest := false, false
 	var r *client.Relay
 	switch {
 	case err != nil:
@@ -126,7 +126,7 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 		case err != nil:
 			add(relayUnreachableCheck(cfg, r, err))
 		default:
-			joined = true
+			joined, guest = true, !me.GuestUntil.IsZero()
 			add(check{"relay", "ok", fmt.Sprintf("reachable at %s; this machine is agent %q", r.Base(), me.Name), ""})
 			client.LearnRelayKey(ctx, r)
 			saved, _ := client.LoadConfig()
@@ -169,7 +169,7 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 	if joined {
 		joinedRelay = r
 	}
-	rep.Checks = append(rep.Checks, tailnetChecks(ctx, joinedRelay)...)
+	rep.Checks = append(rep.Checks, tailnetChecks(ctx, joinedRelay, guest)...)
 
 	// 3. Self-test of tincan mcp in both framings.
 	if exe != "" {
