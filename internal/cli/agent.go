@@ -415,7 +415,7 @@ func formatAgents(agents []client.AgentInfo, now time.Time) string {
 
 func askCmd() *cobra.Command {
 	var wait time.Duration
-	var parent string
+	var parent, project string
 	var notify, asJSON, urgent bool
 	var attach []string
 	cmd := &cobra.Command{
@@ -423,11 +423,15 @@ func askCmd() *cobra.Command {
 		Short: "Ask another agent to do something and wait briefly for the reply",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := envelope.ValidProject(project); err != nil {
+				return err
+			}
 			r, _, err := connect()
 			if err != nil {
 				return err
 			}
 			defer printHeld(cmd, r)
+			ctx := client.WithProject(cmd.Context(), project)
 			body := strings.Join(args[1:], " ")
 			targets, err := client.NormalizeTargets(strings.Split(args[0], ","), "")
 			if err != nil {
@@ -438,7 +442,7 @@ func askCmd() *cobra.Command {
 				if notify {
 					kind = envelope.KindNotify
 				}
-				g, err := r.SendGroup(cmd.Context(), targets, body, kind, parent, attach, urgent)
+				g, err := r.SendGroup(ctx, targets, body, kind, parent, attach, urgent)
 				if err != nil {
 					return err
 				}
@@ -458,7 +462,7 @@ func askCmd() *cobra.Command {
 			}
 			ids := client.AttachmentIDs(ups)
 			if notify {
-				sent, err := r.SendAttachedResult(cmd.Context(), args[0], body, envelope.KindNotify, parent, ids, urgent)
+				sent, err := r.SendAttachedResult(ctx, args[0], body, envelope.KindNotify, parent, ids, urgent)
 				if err != nil {
 					return err
 				}
@@ -467,6 +471,7 @@ func askCmd() *cobra.Command {
 					return writeJSON(cmd.OutOrStdout(), sentJSON{Outcome: "sent", Request: req, Target: sent.Target})
 				}
 				cmd.Print(client.SignedOutHint(req.To, sent.Target))
+				cmd.Print(client.ProjectHint(req.To, sent.Target))
 				if req.Status == envelope.StatusHeld {
 					cmd.Printf("Request %s: held, waiting for the owner's approval.\n", req.ID)
 				} else {
@@ -474,7 +479,7 @@ func askCmd() *cobra.Command {
 				}
 				return nil
 			}
-			res, err := r.AskAttached(cmd.Context(), args[0], body, parent, ids, client.ClampWait(wait), urgent)
+			res, err := r.AskAttached(ctx, args[0], body, parent, ids, client.ClampWait(wait), urgent)
 			if err != nil {
 				return err
 			}
@@ -492,6 +497,7 @@ func askCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&wait, "wait", client.MaxInlineWait, "how long to wait for the reply (max 20s)")
 	cmd.Flags().StringVar(&parent, "parent", "", "the request you are handling, if this continues it (usually automatic)")
 	cmd.Flags().BoolVar(&urgent, "urgent", false, "time-critical request: wake immediately and deliver first")
+	cmd.Flags().StringVar(&project, "project", "", "the project of the session this is for, usually its repo directory name: that session gets it first, any session after about 10 minutes")
 	cmd.Flags().BoolVar(&notify, "notify", false, "send without waiting for a reply")
 	cmd.Flags().StringArrayVar(&attach, "attach", nil, "a local file to attach (repeatable; images or small files)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON and exit 0 answered, 1 failed, 2 pending (--notify: 0 once sent)")

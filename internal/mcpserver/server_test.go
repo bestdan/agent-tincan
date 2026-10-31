@@ -243,6 +243,26 @@ func TestErrorsComeBackAsToolErrors(t *testing.T) {
 	}
 }
 
+// The ask tool's project routes the ask, and a bad label is a tool error.
+func TestAskToolNamesProject(t *testing.T) {
+	m := testrelay.New(t, relay.Config{MaxWait: time.Second})
+	cs := session(t, m, "instinct")
+	out := call(t, cs, "ask", map[string]any{"to": "muse", "message": "x", "project": "Bad Label"})
+	if !strings.HasPrefix(out, "ERROR:") || !strings.Contains(out, "project") {
+		t.Fatalf("bad label = %q", out)
+	}
+	call(t, cs, "ask", map[string]any{"to": "muse", "message": "fix the build", "project": "alpha", "wait_seconds": 1})
+	wrong, right := m.Client(t, "muse"), m.Client(t, "muse")
+	wrong.SetProject("beta")
+	right.SetProject("alpha")
+	if in, err := wrong.Poll(t.Context(), time.Millisecond); err != nil || len(in.Requests) != 0 {
+		t.Fatalf("wrong window = %+v %v", in, err)
+	}
+	if in, err := right.Poll(t.Context(), time.Millisecond); err != nil || len(in.Requests) != 1 {
+		t.Fatalf("matching window = %+v %v", in, err)
+	}
+}
+
 // Parity: the MCP ask and the client ask render the same result, including
 // the note on how the target wakes.
 func TestMCPAndClientAgree(t *testing.T) {

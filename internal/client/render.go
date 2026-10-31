@@ -67,9 +67,20 @@ func formatResult(r Result) string {
 	case r.Done():
 		return fmt.Sprintf("Request %s to %s ended: %s\n", r.Request.ID, r.Request.To, r.Status) + relayNote(r.RelayNote)
 	default:
-		return scheduleHint(r.Request.To, r.Target) + wakeHint(r.Request.To, r.Target) + listenHint(r.Request.To, r.Target) + relayNote(r.RelayNote) + fmt.Sprintf("No reply yet from %s. Request id %s (status %s). Check later with get_reply or `tincan get %s`.\n",
+		return ProjectHint(r.Request.To, r.Target) + scheduleHint(r.Request.To, r.Target) + wakeHint(r.Request.To, r.Target) + listenHint(r.Request.To, r.Target) + relayNote(r.RelayNote) + fmt.Sprintf("No reply yet from %s. Request id %s (status %s). Check later with get_reply or `tincan get %s`.\n",
 			r.Request.To, r.Request.ID, r.Status, r.Request.ID)
 	}
+}
+
+// ProjectHint tells a sender that no session of the project it named is
+// live on the target, from the facts the relay sent with the request. It is
+// empty without them: an old relay, a send that named no project, or a live
+// session.
+func ProjectHint(to string, t *envelope.Target) string {
+	if t == nil || t.ProjectMatch != envelope.ProjectNone {
+		return ""
+	}
+	return "No session of that project is live on " + to + "; any of its sessions can take this after about 10 minutes.\n"
 }
 
 // scheduleHint tells a sender how often a schedule target checks its inbox
