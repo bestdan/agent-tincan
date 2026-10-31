@@ -68,7 +68,7 @@ func leaseReleaseCmd() *cobra.Command {
 	var relayURL, socket string
 	cmd := &cobra.Command{
 		Use:   "release <resource>",
-		Short: "Drop your lease, named exactly as acquired; admin devices can drop any lease",
+		Short: "Drop your lease, named exactly as acquired; an admin can drop any lease with --relay or --socket",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			r, err := leaseRelay(relayURL, socket)
@@ -76,7 +76,11 @@ func leaseReleaseCmd() *cobra.Command {
 				return err
 			}
 			defer printHeld(cmd, r)
-			res, err := client.ReleaseLease(cmd.Context(), r, args[0])
+			release := client.ReleaseLease
+			if relayURL != "" || socket != "" {
+				release = client.AdminReleaseLease
+			}
+			res, err := release(cmd.Context(), r, args[0])
 			if err != nil {
 				return err
 			}

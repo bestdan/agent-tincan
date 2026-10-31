@@ -64,10 +64,26 @@ func AcquireLease(ctx context.Context, c Rawer, resource, note string, ttlSecond
 	return out, err
 }
 
-// ReleaseLease drops the lease on exactly resource, returning it.
+// ReleaseLease drops the caller's own lease on exactly resource, returning
+// it.
 func ReleaseLease(ctx context.Context, c Rawer, resource string) (Lease, error) {
+	return releaseLease(ctx, c, resource, false)
+}
+
+// AdminReleaseLease drops anyone's lease on exactly resource, for an admin
+// device or the local admin socket, returning it. Any other caller gets only
+// what ReleaseLease gives it.
+func AdminReleaseLease(ctx context.Context, c Rawer, resource string) (Lease, error) {
+	return releaseLease(ctx, c, resource, true)
+}
+
+func releaseLease(ctx context.Context, c Rawer, resource string, admin bool) (Lease, error) {
+	in := struct {
+		Resource string `json:"resource"`
+		Admin    bool   `json:"admin,omitempty"`
+	}{resource, admin}
 	var out Lease
-	err := leaseCall(ctx, c, "DELETE", "/v1/leases", map[string]string{"resource": resource}, &out)
+	err := leaseCall(ctx, c, "DELETE", "/v1/leases", in, &out)
 	return out, err
 }
 

@@ -156,7 +156,8 @@ func TestLeaseRelease(t *testing.T) {
 	h.do(museAddr, "DELETE", "/v1/leases", `{"resource":"a"}`, http.StatusNotFound, nil)
 
 	acquire(h, museAddr, `{"resource":"b"}`, http.StatusCreated)
-	h.do(macAddr, "DELETE", "/v1/leases", `{"resource":"b"}`, http.StatusOK, nil)
+	h.do(macAddr, "DELETE", "/v1/leases", `{"resource":"b"}`, http.StatusForbidden, nil)
+	h.do(macAddr, "DELETE", "/v1/leases", `{"resource":"b","admin":true}`, http.StatusOK, nil)
 	rows := auditEvents(h, "lease_released")
 	if len(rows) != 2 {
 		t.Fatalf("lease_released = %+v", rows)
@@ -165,6 +166,36 @@ func TestLeaseRelease(t *testing.T) {
 		t.Fatalf("holder release row = %+v", rows[0])
 	}
 	if rows[1].Actor == "muse" || !strings.Contains(rows[1].Detail, `"reason":"admin"`) || !strings.Contains(rows[1].Detail, `"device":"macbook-pro-44"`) || !strings.Contains(rows[1].Detail, `"holder":"muse"`) {
+		t.Fatalf("admin release row = %+v", rows[1])
+	}
+}
+
+// An agent on an admin device releases as itself: a teammate's lease is
+// refused and its own is audited under its name. The admin path takes
+// "admin": true, which gives nothing to a caller that is not an admin.
+func TestLeaseReleaseAgentOnAdminDevice(t *testing.T) {
+	h, _ := leaseHarness(t)
+	h.joinAt(macAddr, "laptop")
+	acquire(h, museAddr, `{"resource":"theirs"}`, http.StatusCreated)
+	h.doAs(macAddr, "laptop", "POST", "/v1/leases", `{"resource":"mine"}`, http.StatusCreated, nil)
+
+	h.doAs(macAddr, "laptop", "DELETE", "/v1/leases", `{"resource":"theirs"}`, http.StatusForbidden, nil)
+	h.do(macAddr, "DELETE", "/v1/leases", `{"resource":"theirs"}`, http.StatusForbidden, nil)
+	h.do(grokAddr, "DELETE", "/v1/leases", `{"resource":"theirs","admin":true}`, http.StatusForbidden, nil)
+	if l := listLeases(h, museAddr); len(l) != 2 {
+		t.Fatalf("a refused release dropped a lease: %+v", l)
+	}
+
+	h.doAs(macAddr, "laptop", "DELETE", "/v1/leases", `{"resource":"mine"}`, http.StatusOK, nil)
+	h.doAs(macAddr, "laptop", "DELETE", "/v1/leases", `{"resource":"theirs","admin":true}`, http.StatusOK, nil)
+	rows := auditEvents(h, "lease_released")
+	if len(rows) != 2 {
+		t.Fatalf("lease_released = %+v", rows)
+	}
+	if rows[0].Actor != "laptop" || !strings.Contains(rows[0].Detail, `"reason":"holder"`) {
+		t.Fatalf("own release row = %+v", rows[0])
+	}
+	if !strings.Contains(rows[1].Detail, `"reason":"admin"`) || !strings.Contains(rows[1].Detail, `"holder":"muse"`) {
 		t.Fatalf("admin release row = %+v", rows[1])
 	}
 }

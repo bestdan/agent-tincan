@@ -106,20 +106,24 @@ func (s *Server) handleLeaseAcquire(w http.ResponseWriter, r *http.Request) {
 // handleLeaseRelease drops the lease on exactly the named resource. Only its
 // holder or an admin may; an admin's release of a teammate's lease is the one
 // way to clear a lease its holder cannot, short of waiting for it to lapse.
+// An admin device must ask for that with "admin": true, so an agent that runs
+// on one still releases as itself, is refused a teammate's lease, and is
+// named in the audit row. The local admin socket has no agent to act as.
 func (s *Server) handleLeaseRelease(w http.ResponseWriter, r *http.Request) {
-	admin := s.isAdmin(r)
+	var in struct {
+		Resource string `json:"resource"`
+		Admin    bool   `json:"admin"`
+	}
+	if err := decodeOne(r.Body, &in, "lease object"); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	admin := s.isAdmin(r) && (in.Admin || isLocalAdmin(r.Context()))
 	name := ""
 	if !admin {
 		if name = s.agent(w, r); name == "" {
 			return
 		}
-	}
-	var in struct {
-		Resource string `json:"resource"`
-	}
-	if err := decodeOne(r.Body, &in, "lease object"); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
-		return
 	}
 	if in.Resource == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("the lease resource is empty"))
