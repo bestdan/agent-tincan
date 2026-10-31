@@ -39,6 +39,9 @@ func TestTailnetCheckVersion(t *testing.T) {
 		{"1.110.0", "ok", "Tailscale 1.110.0"},
 		{"2.0.0", "ok", "Tailscale 2.0.0"},
 		{"1.104.4-pre", "warn", "unknown"},
+		{"1.103.50-tabc1234-gdef5678", "warn", "Tailscale 1.103.50 is older"},
+		{"1.105.12-tabc1234-gdef5678", "warn", "unknown"},
+		{"1.105.12", "warn", "unknown"},
 		{"1.106.0-pre", "warn", "unknown"},
 		{"1.106.0-dev20261030-tabc1234", "warn", "unknown"},
 		{"1.106.0-dev20261030-tabc1234-dirty", "warn", "unknown"},
@@ -191,6 +194,61 @@ func TestTailnetChecksRole(t *testing.T) {
 				t.Fatalf("got %+v, want %s containing %q", got, tc.status, tc.want)
 			}
 		})
+	}
+}
+
+// The relay answers for the one node that reached it, and with several
+// tailscaleds running that could be any of them, so it is not asked and no
+// line takes its word.
+func TestTailnetChecksSeveralDaemonsSkipRole(t *testing.T) {
+	for _, code := range []int{200, 403} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			second := tailnetSelf("1.104.4", false)
+			second.Socket = "/run/other/tailscaled.sock"
+			stubTailnet(t, tailnetSelf("1.104.4", false), second)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("unexpected relay call: %s", r.URL.Path)
+				w.WriteHeader(code)
+				fmt.Fprint(w, `[]`)
+			}))
+			defer srv.Close()
+			r, err := client.NewRelayFor(client.Config{Relay: srv.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := tailnetChecks(t.Context(), r)
+			if len(got) != 2 {
+				t.Fatalf("got %+v", got)
+			}
+			for _, c := range got {
+				if c.Status != "ok" || c.Fix != "" || !strings.Contains(c.Detail, "tag check skipped") {
+					t.Errorf("got %+v", c)
+				}
+			}
+		})
+	}
+}
+
+// A stopped tailscaled cannot be how this machine reached the relay, so the
+// one running daemon still gets the relay's answer.
+func TestTailnetChecksRoleForTheRunningDaemon(t *testing.T) {
+	stopped := tailnetSelf("1.104.4", false)
+	stopped.Running = false
+	stopped.Socket = "/run/other/tailscaled.sock"
+	stubTailnet(t, stopped, tailnetSelf("1.104.4", false))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+		fmt.Fprint(w, `{"error":"no"}`)
+	}))
+	defer srv.Close()
+	r, err := client.NewRelayFor(client.Config{Relay: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := tailnetChecks(t.Context(), r)
+	if len(got) != 2 || got[0].Status != "ok" || !strings.Contains(got[0].Detail, "tags unknown") ||
+		got[1].Status != "warn" || !strings.Contains(got[1].Detail, "untagged") {
+		t.Fatalf("got %+v", got)
 	}
 }
 

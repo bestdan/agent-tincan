@@ -45,14 +45,22 @@ func deviceRoleOf(ctx context.Context, r *client.Relay) deviceRole {
 }
 
 // tailnetChecks reports each tailscaled on this machine, or one skip line when
-// there is none to ask. r is the joined relay, nil before a join.
+// there is none to ask. r is the joined relay, nil before a join. The relay
+// answers for the node that reached it, and with several tailscaleds running
+// that could be any of them, so it is asked only when one is running.
 func tailnetChecks(ctx context.Context, r *client.Relay) []check {
 	selves := tailnetSelves(ctx)
 	if len(selves) == 0 {
 		return []check{{"tailnet", "ok", "skipped: no tailscaled tincan can reach on this machine", ""}}
 	}
+	running := 0
+	for _, s := range selves {
+		if s.Running {
+			running++
+		}
+	}
 	role := roleUnknown
-	if r != nil {
+	if r != nil && running == 1 {
 		role = deviceRoleOf(ctx, r)
 	}
 	checks := make([]check, len(selves))
@@ -122,19 +130,26 @@ func tailnetCheck(s client.TailnetSelf, role deviceRole) check {
 
 // tailscaleRelease matches a release version: x.y.z, bare from a distro
 // package, or with the commit hashes every Tailscale build carries. A
-// prerelease, dev or dirty build has some other suffix.
+// prerelease, dev or dirty build has some other suffix. An unstable build has
+// this shape too: tailscaleAtLeastMin tells it apart by its odd minor.
 var tailscaleRelease = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)(?:-t[0-9a-f]+)?(?:-g[0-9a-f]+)?$`)
 
 // tailscaleAtLeastMin compares a Tailscale long version with minTailscale.
 // known is false when the version is not a release, since numbers alone do
-// not show what such a build contains.
+// not show what such a build contains. A build below the minimum is older
+// whatever kind it is. At or above it, an odd minor is Tailscale's unstable
+// track, whose patch number is a commit count, not a release.
 func tailscaleAtLeastMin(version string) (atLeast, known bool) {
 	have, ok := tailscaleNumbers(version)
 	if !ok {
 		return false, false
 	}
 	want, _ := tailscaleNumbers(minTailscale)
-	return slices.Compare(have, want) >= 0, true
+	if slices.Compare(have, want) < 0 {
+		return false, true
+	}
+	release := have[1]%2 == 0
+	return release, release
 }
 
 func tailscaleNumbers(version string) ([]int, bool) {
