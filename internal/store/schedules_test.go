@@ -30,7 +30,7 @@ func TestAdvanceScheduleIsConditional(t *testing.T) {
 	if won, err := s.AdvanceSchedule(ctx, due[0]); err != nil || won {
 		t.Fatalf("stale advance = %v, %v", won, err)
 	}
-	list, err := s.Schedules(ctx, "grokbot")
+	list, err := s.Schedules(ctx, "grokbot", 0, MaxSchedules)
 	if err != nil || len(list) != 1 || !list[0].NextAt.Equal(sch.NextAt.Add(3*time.Hour)) {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
@@ -52,7 +52,7 @@ func TestScheduleIDsAreNotReused(t *testing.T) {
 	if won, err := s.AdvanceSchedule(ctx, first); err != nil || !won {
 		t.Fatalf("advance = %v, %v", won, err)
 	}
-	if list, err := s.Schedules(ctx, ""); err != nil || len(list) != 0 {
+	if list, err := s.Schedules(ctx, "", 0, MaxSchedules); err != nil || len(list) != 0 {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
 	second, err := s.AddSchedule(ctx, envelope.Schedule{From: "grokbot", To: "muse", Body: "x", NextAt: c.t.Add(time.Hour)})
@@ -76,7 +76,7 @@ func TestAddScheduleChecksAgentsAndLimit(t *testing.T) {
 	if _, err := s.AddSchedule(ctx, envelope.Schedule{From: "grokbot", To: "muse", Body: "x", NextAt: c.t.Add(time.Hour)}); !errors.Is(err, ErrScheduleLimit) {
 		t.Fatalf("over the limit: %v", err)
 	}
-	if list, err := s.Schedules(ctx, "grokbot"); err != nil || len(list) != MaxSchedules {
+	if list, err := s.Schedules(ctx, "grokbot", 0, MaxSchedules); err != nil || len(list) != MaxSchedules {
 		t.Fatalf("list = %d, %v", len(list), err)
 	}
 }
@@ -94,7 +94,7 @@ func TestDeleteAgentDropsSchedules(t *testing.T) {
 	if _, err := s.DeleteAgent(ctx, "grokbot"); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.Schedules(ctx, "")
+	list, err := s.Schedules(ctx, "", 0, MaxSchedules)
 	if err != nil || len(list) != 1 || list[0].From != "instinct" {
 		t.Fatalf("list = %+v, %v", list, err)
 	}
@@ -141,7 +141,7 @@ func TestBlockScheduleNoticeOnce(t *testing.T) {
 	if err := s.ScheduleFired(ctx, sch.ID, "req-1"); err != nil {
 		t.Fatal(err)
 	}
-	list, err := s.Schedules(ctx, "grokbot")
+	list, err := s.Schedules(ctx, "grokbot", 0, MaxSchedules)
 	if err != nil || len(list) != 1 || list[0].Blocked || list[0].LastRequest != "req-1" {
 		t.Fatalf("list = %+v, %v", list, err)
 	}

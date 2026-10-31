@@ -77,8 +77,8 @@ func (s *Store) AddSchedule(ctx context.Context, sch envelope.Schedule) (envelop
 
 // Schedules lists owner's schedules, or every schedule with owner "", oldest
 // first.
-func (s *Store) Schedules(ctx context.Context, owner string) ([]envelope.Schedule, error) {
-	return s.querySchedules(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE ? IN ('', from_agent) ORDER BY id`, owner)
+func (s *Store) Schedules(ctx context.Context, owner string, after int64, limit int) ([]envelope.Schedule, error) {
+	return s.querySchedules(ctx, `SELECT `+scheduleCols+` FROM schedules WHERE ? IN ('', from_agent) AND id > ? ORDER BY id LIMIT ?`, owner, after, limit)
 }
 
 // DueSchedules lists the schedules whose next time has come, earliest first.
