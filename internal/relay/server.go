@@ -2314,7 +2314,7 @@ const heldTextBudget = client.MaxResponseBytes - 1<<20
 var errHeldTextCut = errors.New("this request's whole text is not shown yet: decide older held requests, then list again")
 
 // heldCut sets each held request's follow-on and returns the ids of those
-// whose long text, a follow-on's or guest's body or a first request's then, did not fit
+// whose long text, a follow-on's or guest's body and any then, did not fit
 // heldTextBudget. reqs is oldest first and everything after the first that
 // does not fit is cut too, so deciding a request never cuts one the owner
 // has already read.
@@ -2328,17 +2328,20 @@ func (s *Server) heldCut(ctx context.Context, reqs []envelope.Request) map[strin
 		} else if ok {
 			req.Then = &then
 		}
-		text := ""
-		switch {
-		case req.FollowOf != "" || req.FromGuest:
-			text = req.Body
-		case req.Then != nil:
-			text = req.Then.Body
-		default:
+		var texts []string
+		if req.FollowOf != "" || req.FromGuest {
+			texts = append(texts, req.Body)
+		}
+		if req.Then != nil {
+			texts = append(texts, req.Then.Body)
+		}
+		if len(texts) == 0 {
 			continue
 		}
-		wire, _ := json.Marshal(text) // the size it has in the response
-		spent += len(wire)
+		for _, text := range texts {
+			wire, _ := json.Marshal(text) // the size it has in the response
+			spent += len(wire)
+		}
 		if spent > heldTextBudget {
 			cut[req.ID] = true
 		}

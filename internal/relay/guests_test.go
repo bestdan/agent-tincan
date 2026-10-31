@@ -1488,3 +1488,46 @@ func TestGuestTermEndingMidCallStopsTheWrite(t *testing.T) {
 		}
 	})
 }
+
+// A marked request's body and its follow-on share the listing's budget, so a
+// short body cannot carry a long then past it. This takes unapproved guest
+// work: what follows from it is held, and a teammate's send can carry a then.
+func TestHeldListFitsThensOnMarkedRequests(t *testing.T) {
+	m := testrelay.NewWithAdminLogin(t, relay.Config{})
+	g := m.JoinGuest(t, guestName, client.GuestInvite{Ask: []string{"muse", "instinct"}, ForSeconds: guestFor, NoHold: true})
+	muse, instinct, admin := m.Client(t, "muse"), m.Client(t, "instinct"), m.Client(t, "admin")
+	for to, c := range map[string]*client.Relay{"muse": muse, "instinct": instinct} {
+		first, err := g.Send(t.Context(), to, "start", envelope.KindAsk, "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		claimOne(t, c, first.ID)
+	}
+	then := strings.Repeat("<", envelope.MaxThenBody)
+	const asks = 45 // two senders, since each may send 30 a minute
+	var last envelope.Request
+	for i := range asks {
+		if i%2 == 0 {
+			last = sendThen(t, muse, "grokbot", "find it", "instinct", then)
+		} else {
+			last = sendThen(t, instinct, "grokbot", "find it", "muse", then)
+		}
+		if !last.FromGuest || last.Status != envelope.StatusHeld {
+			t.Fatalf("send %d = %+v", i, last)
+		}
+	}
+	held := heldList(t, admin)
+	if len(held) != asks {
+		t.Fatalf("held %d, want %d", len(held), asks)
+	}
+	if held[0].Then == nil || held[0].Then.Body != then {
+		t.Fatalf("oldest then is cut: %+v", held[0].Then)
+	}
+	if tail := held[asks-1].Then; tail == nil || !strings.Contains(tail.Body, "not shown") {
+		t.Fatalf("newest then is not cut: %+v", tail)
+	}
+	err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+last.ID+"/approve", nil, nil)
+	if e, ok := errors.AsType[*client.APIError](err); !ok || e.Code != http.StatusPreconditionFailed {
+		t.Fatalf("approve unread: %v", err)
+	}
+}
