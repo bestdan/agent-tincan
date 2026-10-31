@@ -671,6 +671,7 @@ func TestSocketWakeLockErrorCountsAsFailure(t *testing.T) {
 // whole queue, so the push the matching window made must stand: without this
 // that window would push the same request again after every such peek.
 func TestSocketWakeHiddenRequestKeepsDelivery(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
 	if err := os.MkdirAll(shared.dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -703,6 +704,7 @@ func TestSocketWakeHiddenRequestKeepsDelivery(t *testing.T) {
 // push stands, and a request that is in neither list has left. One hidden
 // request it cannot name leaves the record alone, as a capped list does.
 func TestSocketWakeHiddenIDsSeparateDeliveries(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
 	if err := os.MkdirAll(shared.dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -739,6 +741,7 @@ func TestSocketWakeHiddenIDsSeparateDeliveries(t *testing.T) {
 // The other half of once-only delivery: however many empty peeks another
 // project's window makes, the matching window pushes its request once.
 func TestSocketWakeHiddenRequestPushedOnce(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: 200 * time.Millisecond})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
@@ -765,6 +768,7 @@ func TestSocketWakeHiddenRequestPushedOnce(t *testing.T) {
 // a clarification would look already delivered and the idle window would
 // never hear of it.
 func TestSocketWakeAnnouncesRequeuedRequestBesideHidden(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	fastChannel(t, 20*time.Millisecond, time.Hour)
 	m := testrelay.New(t, relay.Config{PollHold: time.Second})
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}

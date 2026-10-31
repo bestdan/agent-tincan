@@ -293,7 +293,7 @@ func TestTraceOutWritesPrivateFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0o600 {
+	if !hasMode(st, 0o600) {
 		t.Fatalf("mode = %o, want 600", st.Mode().Perm())
 	}
 	if !strings.Contains(got, path) || strings.Contains(got, "summarize this paper") {
@@ -318,7 +318,7 @@ func TestTraceOutRefusesExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != "keep me" || st.Mode().Perm() != 0o644 {
+	if string(data) != "keep me" || !hasMode(st, 0o644) {
 		t.Fatalf("file changed: %q %o", data, st.Mode().Perm())
 	}
 }
@@ -348,7 +348,7 @@ func TestTraceForceReplacesPrivately(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !st.Mode().IsRegular() || st.Mode().Perm() != 0o600 {
+		if !st.Mode().IsRegular() || !hasMode(st, 0o600) {
 			t.Fatalf("%s mode = %v", path, st.Mode())
 		}
 		if data, _ := os.ReadFile(path); string(data) != formatTrace(traceFixture()) {

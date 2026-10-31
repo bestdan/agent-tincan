@@ -118,6 +118,7 @@ func TestHeldListsKindAndAttachments(t *testing.T) {
 }
 
 func TestHeldShowsThen(t *testing.T) {
+	skipOnWindows(t, skipRelayHost)
 	m := testrelay.New(t, relay.Config{})
 	path := filepath.Join(t.TempDir(), "approval.json")
 	if err := os.WriteFile(path, []byte(`{"gate":{"muse":{"from":"*"}}}`), 0600); err != nil {
