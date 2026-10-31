@@ -174,6 +174,9 @@ func (d *dist) release() string {
 // tincan upgrade.
 func (d *dist) installable(platform string) bool {
 	name := "tincan_" + platform
+	if strings.HasPrefix(platform, "windows_") {
+		name += ".exe"
+	}
 	if !distBinary.MatchString(name) {
 		return false
 	}
