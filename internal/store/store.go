@@ -846,13 +846,17 @@ type QueueScope struct {
 	Grace time.Duration
 }
 
+// scopeOpen is the test for a request a scope may take, with the arguments
+// QueueScope.filter gives it.
+const scopeOpen = `(to_project = '' OR to_project = ? OR queued_at <= ?)`
+
 // filter narrows a query on requests to what the scope may take at now. It
 // is the one test every delivery path shares.
 func (scope QueueScope) filter(now time.Time) (string, []any) {
 	if scope.Grace <= 0 {
 		return "", nil
 	}
-	return ` AND (to_project = '' OR to_project = ? OR queued_at <= ?)`, []any{scope.Project, now.Add(-scope.Grace).UnixMilli()}
+	return ` AND ` + scopeOpen, []any{scope.Project, now.Add(-scope.Grace).UnixMilli()}
 }
 
 // Deliver hands up to limit queued requests for agent to its poller, marking
@@ -925,6 +929,19 @@ func (s *Store) QueuedIDs(ctx context.Context, agent string) ([]string, error) {
 	now := s.now().UnixMilli()
 	return s.ids(ctx, `SELECT id FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ? ORDER BY created_at, rowid`,
 		agent, string(envelope.StatusQueued), now, now)
+}
+
+// HiddenIDsFor lists up to limit ids of agent's queued requests that scope
+// may not take yet, oldest first.
+func (s *Store) HiddenIDsFor(ctx context.Context, agent string, scope QueueScope, limit int) ([]string, error) {
+	at := s.now()
+	filter, filterArgs := scope.filter(at)
+	if filter == "" {
+		return nil, nil
+	}
+	now := at.UnixMilli()
+	args := append(append([]any{agent, string(envelope.StatusQueued), now, now}, filterArgs...), limit)
+	return s.ids(ctx, `SELECT id FROM requests WHERE to_agent = ? AND status = ? AND expires_at > ? AND deliver_after <= ? AND NOT `+scopeOpen+` ORDER BY created_at, rowid LIMIT ?`, args...)
 }
 
 // ids runs a query whose rows are single ids.

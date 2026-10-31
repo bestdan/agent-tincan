@@ -548,6 +548,10 @@ type Waiting struct {
 	// project, so this peek does not show the agent's whole queue. A relay
 	// that predates it leaves it zero.
 	Hidden int `json:"hidden,omitempty"`
+	// HiddenIDs names up to the first 50 of the Hidden requests, without
+	// bodies, so a peek can tell one of them from a request that left the
+	// queue.
+	HiddenIDs []string `json:"hidden_ids,omitempty"`
 }
 
 // Poll waits up to hold for requests addressed to this agent or unseen

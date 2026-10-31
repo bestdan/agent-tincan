@@ -99,12 +99,13 @@ func (w window) poll(h *harness) []string {
 
 // windowPeek is what a peek reports.
 type windowPeek struct {
-	Waiting int                `json:"waiting"`
-	Queued  int                `json:"queued"`
-	Urgent  int                `json:"urgent"`
-	Pending []envelope.Pending `json:"pending"`
-	Hidden  int                `json:"hidden"`
-	raw     string
+	Waiting   int                `json:"waiting"`
+	Queued    int                `json:"queued"`
+	Urgent    int                `json:"urgent"`
+	Pending   []envelope.Pending `json:"pending"`
+	Hidden    int                `json:"hidden"`
+	HiddenIDs []string           `json:"hidden_ids"`
+	raw       string
 }
 
 func (w window) peek(h *harness) windowPeek {
@@ -210,23 +211,23 @@ func TestProjectPeekMatchesDelivery(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &scoped); err != nil {
 		t.Fatal(err)
 	}
-	if got := museBeta.peek(h); got.Waiting != 0 || got.Queued != 0 || got.Urgent != 0 || got.Pending != nil || got.Hidden != 1 {
+	if got := museBeta.peek(h); got.Waiting != 0 || got.Queued != 0 || got.Urgent != 0 || got.Pending != nil || got.Hidden != 1 || len(got.HiddenIDs) != 1 || got.HiddenIDs[0] != scoped.ID {
 		t.Fatalf("wrong window's peek = %+v", got)
 	}
 	open := h.send(grokAddr, "muse", "unscoped")
 	got := museBeta.peek(h)
-	if got.Queued != 1 || got.Urgent != 0 || len(got.Pending) != 1 || got.Pending[0].ID != open.ID || got.Hidden != 1 {
+	if got.Queued != 1 || got.Urgent != 0 || len(got.Pending) != 1 || got.Pending[0].ID != open.ID || got.Hidden != 1 || len(got.HiddenIDs) != 1 || got.HiddenIDs[0] != scoped.ID {
 		t.Fatalf("wrong window's peek with an open ask = %+v", got)
 	}
 	got = museAlpha.peek(h)
-	if got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 || got.Hidden != 0 {
+	if got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 || got.Hidden != 0 || got.HiddenIDs != nil {
 		t.Fatalf("matching peek = %+v", got)
 	}
 	if strings.Contains(got.raw, "alpha") {
 		t.Fatalf("peek carries the label: %s", got.raw)
 	}
 	clk.advance(SessionGrace)
-	if got := museBeta.peek(h); got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 || got.Hidden != 0 {
+	if got := museBeta.peek(h); got.Queued != 2 || got.Urgent != 1 || len(got.Pending) != 2 || got.Hidden != 0 || got.HiddenIDs != nil {
 		t.Fatalf("wrong window's peek after fallback = %+v", got)
 	}
 	if ids := museBeta.poll(h); len(ids) != 2 || ids[0] != scoped.ID {

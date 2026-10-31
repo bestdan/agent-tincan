@@ -1027,9 +1027,6 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 				if pings > 0 {
 					out["pings"] = pings
 				}
-				if hidden := s.hiddenQueued(r.Context(), name, n); hidden > 0 {
-					out["hidden"] = hidden
-				}
 				if n > 0 {
 					urgent, err := s.store.CountUrgentQueuedFor(r.Context(), name, scope)
 					if err != nil {
@@ -1045,6 +1042,9 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					out["pending"] = pending
+				}
+				if hidden, ids := s.hiddenQueued(r.Context(), name, scope, n); hidden > 0 {
+					out["hidden"], out["hidden_ids"] = hidden, ids
 				}
 				if replies != client.RepliesNone {
 					out["replies"] = emptyIfNil(reps)
@@ -1066,7 +1066,8 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 			case <-r.Context().Done():
 				return
 			}
-			v, hidden := s.upgradeFor(r), s.hiddenQueued(r.Context(), name, 0)
+			v := s.upgradeFor(r)
+			hidden, ids := s.hiddenQueued(r.Context(), name, scope, 0)
 			if v == "" && hidden == 0 {
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -1076,7 +1077,7 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 				out["upgrade_available"] = v
 			}
 			if hidden > 0 {
-				out["hidden"] = hidden
+				out["hidden"], out["hidden_ids"] = hidden, ids
 			}
 			writeJSON(w, http.StatusOK, out)
 			return
@@ -1274,16 +1275,21 @@ func (s *Server) touchProject(agent, label string) {
 }
 
 // hiddenQueued is how many of agent's queued requests a peek that saw seen of
-// them left out for naming another project, so a client can tell an empty
-// peek from an empty queue. A failed count reads as none: the peek still
-// reports what it saw.
-func (s *Server) hiddenQueued(ctx context.Context, agent string, seen int) int {
+// them left out for naming another project, and up to MaxPeekPending of their
+// ids, so a client can tell a request still queued from one that left. Fewer
+// ids than the count tells it the list is not complete. A failed count reads
+// as none: the peek still reports what it saw.
+func (s *Server) hiddenQueued(ctx context.Context, agent string, scope store.QueueScope, seen int) (int, []string) {
 	total, _, err := s.store.CountQueuedWithPings(ctx, agent)
 	if err != nil {
 		log.Printf("peek: count queued: %v", err)
-		return 0
+		return 0, nil
 	}
-	return max(total-seen, 0)
+	ids, err := s.store.HiddenIDsFor(ctx, agent, scope, MaxPeekPending)
+	if err != nil {
+		log.Printf("peek: list hidden: %v", err)
+	}
+	return max(total-seen, len(ids)), ids
 }
 
 // noteSocketWake records whether agent's session advertised socket wake on

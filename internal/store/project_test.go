@@ -184,3 +184,24 @@ func TestFallenBackReportsOncePerClock(t *testing.T) {
 		t.Fatalf("after the answer's grace = %+v", reqs)
 	}
 }
+
+// HiddenIDsFor is the complement of what a scope may take: it names another
+// project's request during the grace and nothing a scope can take.
+func TestHiddenIDsFollowScope(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	theirs := scopedAsk(t, s, "alpha")
+	scopedAsk(t, s, "beta")
+	scopedAsk(t, s, "")
+	scope := QueueScope{Project: "beta", Grace: projectGrace}
+	if ids, err := s.HiddenIDsFor(ctx, "handler", scope, 10); err != nil || len(ids) != 1 || ids[0] != theirs.ID {
+		t.Fatalf("hidden = %v %v", ids, err)
+	}
+	if ids, err := s.HiddenIDsFor(ctx, "handler", QueueScope{}, 10); err != nil || len(ids) != 0 {
+		t.Fatalf("hidden from the zero scope = %v %v", ids, err)
+	}
+	c.advance(projectGrace)
+	if ids, err := s.HiddenIDsFor(ctx, "handler", scope, 10); err != nil || len(ids) != 0 {
+		t.Fatalf("hidden after grace = %v %v", ids, err)
+	}
+}
