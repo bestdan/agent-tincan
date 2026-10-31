@@ -673,7 +673,8 @@ one teammate at a time. Only your owner sets lines, from an admin device with
 
 Your own line ends with you, after good_at. Other sessions of yours can run as
 the same agent, so that line can show busy while you are free. It is you, not a
-teammate: a send to it fails.
+teammate: a send to it fails. `tincan agents` on the relay's own machine reads
+the local admin socket and shows no you; list_agents there still does.
 
 A Claude Code teammate whose owner runs `tincan mcp --share-title` also shows
 working_on="..." (quoted) before good_at: its session's title (which can echo

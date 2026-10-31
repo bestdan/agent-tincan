@@ -282,9 +282,11 @@ func (d *Directory) ResolveAgent(ctx context.Context, remoteAddr, claimed string
 
 // BoundAgent names the agent behind remoteAddr without changing anything,
 // for a caller that may be no agent at all: of the agents bound to the node,
-// the one claimed names, or with no claim the only one. It is "" when none
-// fits or the lookup fails. Unlike ResolveAgent it never re-admits a rebuilt
-// machine, so its answer is for display and proves nothing beyond that.
+// the one claimed names, or with no claim the only one, unless another agent
+// from the same rebuilt machine still waits and the call could be that one's.
+// It is "" when none fits or a lookup fails. Unlike ResolveAgent it never
+// re-admits a rebuilt machine, so its answer is for display and proves nothing
+// beyond that.
 func (d *Directory) BoundAgent(ctx context.Context, remoteAddr, claimed string) string {
 	n, err := d.Node(ctx, remoteAddr)
 	if err != nil {
@@ -294,7 +296,13 @@ func (d *Directory) BoundAgent(ctx context.Context, remoteAddr, claimed string) 
 	if err != nil {
 		return ""
 	}
-	if claimed == "" && len(agents) == 1 {
+	if claimed == "" {
+		if len(agents) != 1 {
+			return ""
+		}
+		if waiting, err := d.awaitingReadmit(ctx, n); err != nil || len(waiting) > 0 {
+			return ""
+		}
 		return agents[0].Name
 	}
 	for _, a := range agents {

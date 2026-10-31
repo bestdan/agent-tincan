@@ -222,6 +222,35 @@ func TestNamelessCallIgnoresAgentOnLiveMachine(t *testing.T) {
 	if got, err := f.dir.Resolve(ctx, rebuiltAddr, ""); err != nil || got != "codex" {
 		t.Fatalf("resolve = %q, %v", got, err)
 	}
+	if got := f.dir.BoundAgent(ctx, rebuiltAddr, ""); got != "codex" {
+		t.Fatalf("nameless BoundAgent = %q, want codex", got)
+	}
+}
+
+// BoundAgent names no one for a nameless caller while a sibling from the same
+// rebuilt machine still waits, as ResolveAgent refuses that caller: it could
+// be the sibling. A caller that names itself is still answered, and the
+// lookup moves nobody.
+func TestBoundAgentNamesNoOneWhileSiblingAwaitsReadmit(t *testing.T) {
+	f := newRebindFixture(t, identity.Config{}, newBox)
+	ctx := context.Background()
+	f.store.PutAgent(ctx, identity.Agent{Name: "muse", NodeID: "nBOX", NodeName: "instinct", NodeUser: matt})
+	if res, err := f.dir.ResolveAgent(ctx, rebuiltAddr, "muse"); err != nil || res.Rebind == nil {
+		t.Fatalf("header muse = %+v, %v", res, err)
+	}
+
+	if got := f.dir.BoundAgent(ctx, rebuiltAddr, ""); got != "" {
+		t.Fatalf("nameless BoundAgent = %q, want none while instinct waits", got)
+	}
+	if got := f.dir.BoundAgent(ctx, rebuiltAddr, "muse"); got != "muse" {
+		t.Fatalf("BoundAgent muse = %q, want muse", got)
+	}
+	if got := f.dir.BoundAgent(ctx, rebuiltAddr, "instinct"); got != "" {
+		t.Fatalf("BoundAgent instinct = %q, want none before it is re-admitted", got)
+	}
+	if a := agentNamed(t, f.dir, "instinct"); a.NodeID != "nBOX" {
+		t.Fatalf("instinct moved to %s, want it still on nBOX", a.NodeID)
+	}
 }
 
 // The recorded machine name is compared without its dedup suffix, so a
