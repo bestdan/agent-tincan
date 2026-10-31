@@ -72,6 +72,24 @@ func (s *Server) followOnBar(ctx context.Context, first envelope.Request, to str
 	return "", nil
 }
 
+// webHeaderRoom is kept free in a follow-on to a web teammate for the
+// request line the web agent puts before the message it types.
+const webHeaderRoom = 128
+
+// followOnLimit is how long a follow-on to agent may be. A web teammate
+// fails a message over webSendBudget without sending it, and a follow-on
+// never moves to one that would take it, so its reply is cut to fit.
+func (s *Server) followOnLimit(ctx context.Context, agent string) (int, error) {
+	target, ok, err := s.lookupAgent(ctx, agent)
+	if err != nil {
+		return 0, err
+	}
+	if ok && (onboard.IsWebChatKind(target.Kind) || onboard.IsHeldWebKind(target.Kind)) {
+		return webSendBudget - webHeaderRoom, nil
+	}
+	return envelope.DefaultMaxBody, nil
+}
+
 // fireFollowOn sends request id's follow-on if it has one due. Its ctx may
 // be a handler's, since a reply and Sweep both run in handlers, so it runs on
 // past a cancelled call. A second caller for the same id returns at once;
@@ -107,7 +125,9 @@ func (s *Server) tryFollowOn(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if !s.isAgent(ctx, first.From) {
+	if _, ok, err := s.lookupAgent(ctx, first.From); err != nil {
+		return err
+	} else if !ok {
 		return s.dropFollowOn(ctx, first, due.Then.To, "", "asker removed")
 	}
 	bar, err := s.followOnBar(ctx, first, due.Then.To)
@@ -117,7 +137,11 @@ func (s *Server) tryFollowOn(ctx context.Context, id string) error {
 	if bar != "" {
 		return s.dropFollowOn(ctx, first, due.Then.To, bar, bar)
 	}
-	body := followOnBody(due.Then.Body, first.To, due.Reply)
+	limit, err := s.followOnLimit(ctx, due.Then.To)
+	if err != nil {
+		return err
+	}
+	body := followOnBody(due.Then.Body, first.To, due.Reply, limit)
 	req, err := s.submit(ctx, envelope.Request{From: first.From, To: due.Then.To, Kind: envelope.KindAsk, Body: body, FollowOf: id, FromSession: due.FromSession})
 	if err == nil {
 		s.record(ctx, "follow_on_sent", id, first.TraceID, "relay", store.DetailJSON(map[string]any{"follow_on": req.ID, "to": req.To, "status": req.Status}))
@@ -179,19 +203,19 @@ const followOnFraming = "Below, between the line <<<REPLY %[1]s>>> and the line 
 
 // followOnBody is the follow-on's own text, a fixed line, and reply between
 // delimiters whose nonce appears nowhere in either text, so nothing the
-// replier wrote can close them. The reply is cut so the body fits
-// DefaultMaxBody. The delimiters are an instruction to a model, not a
-// control (docs/trust-model.md).
-func followOnBody(ask, from, reply string) string {
+// replier wrote can close them. The reply is cut so the body fits limit.
+// The delimiters are an instruction to a model, not a control
+// (docs/trust-model.md).
+func followOnBody(ask, from, reply string, limit int) string {
 	nonce := followOnNonce()
 	for strings.Contains(reply, nonce) || strings.Contains(ask, nonce) {
 		nonce = followOnNonce()
 	}
 	head := ask + "\n\n" + fmt.Sprintf(followOnFraming, nonce, from) + "\n\n<<<REPLY " + nonce + ">>>\n"
 	tail := "\n<<<END REPLY " + nonce + ">>>"
-	if len(head)+len(reply)+len(tail) <= envelope.DefaultMaxBody {
+	if len(head)+len(reply)+len(tail) <= limit {
 		return head + reply + tail
 	}
-	cut, _ := textfit.Truncate(reply, envelope.DefaultMaxBody-len(head)-len(tail)-textfit.Reserve)
+	cut, _ := textfit.Truncate(reply, limit-len(head)-len(tail)-textfit.Reserve)
 	return head + cut + tail
 }

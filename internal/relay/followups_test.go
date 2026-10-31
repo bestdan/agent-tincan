@@ -270,6 +270,29 @@ func TestThenLongReplyIsCutToFit(t *testing.T) {
 	}
 }
 
+// A web teammate fails a message over its send limit, and a follow-on
+// cannot move, so the reply is cut to what the teammate can type.
+func TestThenLongReplyIsCutForWebTarget(t *testing.T) {
+	for _, kind := range []string{"chatgpt-web", "dot-web"} {
+		t.Run(kind, func(t *testing.T) {
+			m := testrelay.New(t, relay.Config{})
+			if ok, err := m.Store.SetAgentKind(t.Context(), "instinct", kind); !ok || err != nil {
+				t.Fatal(ok, err)
+			}
+			first := sendThen(t, m.Client(t, "grokbot"), "muse", "write a lot", "instinct", "file it")
+			answer(t, m.Client(t, "muse"), first.ID, strings.Repeat("y", 40<<10))
+			next := oneOpen(t, m, "instinct")
+			const header = len("[tincan request  from ]\n") + 64 // id and name, as the web agent adds them
+			if len(next.Body)+header > 32<<10 {
+				t.Fatalf("body is %d bytes", len(next.Body))
+			}
+			if inner, _ := wrapped(t, next.Body); !strings.Contains(inner, "[truncated:") {
+				t.Fatalf("cut reply = %q...", inner[:32])
+			}
+		})
+	}
+}
+
 // R-KTD7: an approved council ask must not hand its approval to a
 // follow-on: dot-web stays held.
 func TestThenApprovedCouncilLeavesFollowOnHeld(t *testing.T) {
@@ -330,6 +353,67 @@ func TestThenHeldTargetStaysHeldUntilApproved(t *testing.T) {
 	inbox, err := inst.Poll(t.Context(), time.Millisecond)
 	if err != nil || len(inbox.Requests) != 1 || !strings.Contains(inbox.Requests[0].Body, "found it") {
 		t.Fatalf("approved follow-on: %+v %v", inbox, err)
+	}
+}
+
+// heldChainVisible says whether agent can reach the chain of trace, by
+// trace and by search for word.
+func heldChainVisible(t *testing.T, c *client.Relay, trace, word string) (traced, found bool) {
+	t.Helper()
+	err := c.Raw(t.Context(), "GET", "/v1/trace/"+trace, nil, nil)
+	if err != nil && !client.IsStatus(err, http.StatusNotFound) {
+		t.Fatal(err)
+	}
+	hits, serr := c.Search(t.Context(), word, 0)
+	if serr != nil {
+		t.Fatal(serr)
+	}
+	return err == nil, len(hits) > 0
+}
+
+// The hold is the control: the target of a held follow-on cannot read the
+// reply through the chain it would join, before approval or after a denial.
+func TestThenHeldTargetCannotReadChain(t *testing.T) {
+	for _, tc := range []struct {
+		decide string
+		sees   bool
+	}{{"deny", false}, {"approve", true}} {
+		t.Run(tc.decide, func(t *testing.T) {
+			m := testrelay.New(t, relay.Config{})
+			gateTarget(t, m, "instinct")
+			grok, muse, inst, admin := m.Client(t, "grokbot"), m.Client(t, "muse"), m.Client(t, "instinct"), m.Client(t, "admin")
+			first := sendThen(t, grok, "muse", "find it", "instinct", "file it")
+			answer(t, muse, first.ID, "zebrafish answer")
+			next := oneOpen(t, m, "instinct")
+			if traced, found := heldChainVisible(t, inst, first.TraceID, "zebrafish"); traced || found {
+				t.Fatalf("held target reads the chain: trace %v, search %v", traced, found)
+			}
+			if traced, found := heldChainVisible(t, grok, first.TraceID, "zebrafish"); !traced || !found {
+				t.Fatalf("asker lost the chain: trace %v, search %v", traced, found)
+			}
+			if err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+next.ID+"/"+tc.decide, map[string]string{"reason": "no"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if traced, found := heldChainVisible(t, inst, first.TraceID, "zebrafish"); traced != tc.sees || found != tc.sees {
+				t.Fatalf("after %s: trace %v, search %v", tc.decide, traced, found)
+			}
+		})
+	}
+}
+
+// Approving a held follow-on releases the reply, so the owner sees it,
+// however long the follow-on's own text is.
+func TestHeldListShowsFollowOnReply(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	gateTarget(t, m, "instinct")
+	first := sendThen(t, m.Client(t, "grokbot"), "muse", "find it", "instinct", strings.Repeat("x", 500))
+	answer(t, m.Client(t, "muse"), first.ID, "zebrafish answer")
+	var held []envelope.Request
+	if err := m.Client(t, "admin").Raw(t.Context(), "GET", "/v1/admin/held", nil, &held); err != nil {
+		t.Fatal(err)
+	}
+	if len(held) != 1 || !strings.Contains(held[0].Body, "zebrafish answer") {
+		t.Fatalf("held = %+v", held)
 	}
 }
 
@@ -418,6 +502,9 @@ func TestThenRefusedShapes(t *testing.T) {
 			err := grok.Raw(t.Context(), "POST", "/v1/send", in, nil)
 			if err == nil {
 				t.Fatal("send was accepted")
+			}
+			if name == "attachments" && !strings.Contains(err.Error(), "then does not take attachments") {
+				t.Fatalf("refused for another reason: %v", err)
 			}
 			var n int
 			if err := m.Store.DB().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM requests WHERE from_agent = 'grokbot'`).Scan(&n); err != nil || n != 0 {

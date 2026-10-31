@@ -499,7 +499,7 @@ func askCmd() *cobra.Command {
 				cmd.Print(client.FormatResult(res))
 			}
 			if thenTo != "" {
-				cmd.Println(client.ThenNote(thenTo))
+				cmd.Println(client.ThenNote(thenTo, res.Status))
 			}
 			return nil
 		},

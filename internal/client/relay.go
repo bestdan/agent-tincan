@@ -496,9 +496,16 @@ func (r *Relay) AskThen(ctx context.Context, to, body, parent string, then envel
 	return r.asked(ctx, s, wait)
 }
 
-// ThenNote is what an asker is told about a follow-on it just queued.
-func ThenNote(to string) string {
-	return "Once this is answered, the relay sends your follow-on to " + to + ". If it can't, you get a notice."
+// ThenNote is what an asker is told about a follow-on it just queued, given
+// the status its ask has come back with.
+func ThenNote(to string, status envelope.Status) string {
+	switch status {
+	case envelope.StatusAnswered:
+		return "This is answered, so the relay is sending your follow-on to " + to + ". If that is refused, you get a notice."
+	case envelope.StatusFailed, envelope.StatusDeclined, envelope.StatusCancelled, envelope.StatusExpired:
+		return "This ended without an answer, so your follow-on to " + to + " was dropped."
+	}
+	return "Once this is answered, the relay sends your follow-on to " + to + ". If that is refused, you get a notice. If this ends without an answer, the follow-on is dropped."
 }
 
 // What a poll does with unseen replies to this agent's own requests. No

@@ -2256,7 +2256,11 @@ func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 	kinds := map[string]string{} // target -> kind, for the lookups that succeeded
 	for i, req := range reqs {
 		full := req.Body
-		req.Body = approvalPreview(req.Body)
+		// A follow-on's reply starts past any preview, and approving
+		// releases it, so the owner reads the whole body.
+		if req.FollowOf == "" {
+			req.Body = approvalPreview(req.Body)
+		}
 		if then, ok, err := s.store.FollowOnOf(r.Context(), req.ID); err != nil {
 			log.Printf("held %s: follow-on: %v", req.ID, err)
 		} else if ok {
