@@ -456,7 +456,7 @@ Reply attachments are not carried, and neither are progress or relay notes.
 | `-32004` | Another A2A method, a message to a task not in needs_input, or the relay refused the guest, such as a teammate it is not listed for |
 | `-32005` | A part with `raw`, `url` or `data` |
 | `-32009` | `A2A-Version` is not 1.0 |
-| `-32600`, `-32601`, `-32602`, `-32603`, `-32700` | As in JSON-RPC. A call with no `id` is `-32600`, and so is a batch |
+| `-32600`, `-32601`, `-32602`, `-32603`, `-32700` | As in JSON-RPC. A call with no `id`, or with an `id` that is not a string or number, is `-32600`, and so is a batch. Anything after the one request in the body is `-32700`. A bad `id` comes back as `null` |
 
 `POST /v1/admin/connect` takes an optional `guest` object, the same shape as on an invite: `{"name": "pal", "guest": {"ask": ["muse"], "for_seconds": 2592000}}`. It binds a virtual guest and answers `code`, `cards`, `unpublished` (listed teammates `a2a.json` does not publish), `guest_until`, `guest_asks` and `hold_alerts`, and audits `guest_connected`. It is new-only: a taken name answers 409, even a guest's. `replace` and `no_hold` answer 400, and so does any list or term a guest invite would refuse. `--admin-login` is not needed, because a virtual guest has no machine name to pass off as an admin device. The relay advertises `"gateway_guests": true` in `GET /v1/capabilities`. The client checks it first and then checks that `guest_until` came back, because a relay without it would ignore the field and bind a full teammate.
 
