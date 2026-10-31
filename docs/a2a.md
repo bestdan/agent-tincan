@@ -48,7 +48,7 @@ Each ask waits in `tincan held` for you, as a guest's does. The task stays in `T
 - `SendMessage` waits 25 seconds at most, and then returns the state so far, even though the spec has it wait until the task ends or needs input. A task can wait days for you, so a client must poll `GetTask`.
 - Each task stands alone. A new message's `contextId` is ignored, and a teammate sees no earlier task. Only a task waiting for input can be continued.
 - A retried `SendMessage` is a new ask.
-- A client can cancel a task only until a teammate has been given it.
+- A client can cancel a task only until a teammate has been given it, or claimed it in the past. A task that went back to the queue after a claim or an answer cannot be cancelled.
 - A gateway guest cannot use the MCP tools.
 
 ## Ending it

@@ -335,6 +335,9 @@ type Connector struct {
 // Connect binds the virtual agent and mints a login code. It refuses a name
 // held by a real tailnet node unless replace is set.
 func (c Connector) Connect(ctx context.Context, name string, replace bool) (string, string, error) {
+	if err := c.dropOldTokens(ctx, name); err != nil {
+		return "", "", err
+	}
 	if err := c.Dir.BindVirtual(ctx, name, replace); err != nil {
 		return "", "", err
 	}
@@ -345,11 +348,29 @@ func (c Connector) Connect(ctx context.Context, name string, replace bool) (stri
 // ConnectGuest binds a new virtual guest and mints a login code. It returns
 // the gateway's base URL, which agent cards hang off.
 func (c Connector) ConnectGuest(ctx context.Context, name string, terms identity.GuestTerms) (string, string, error) {
+	if err := c.dropOldTokens(ctx, name); err != nil {
+		return "", "", err
+	}
 	if err := c.Dir.BindVirtualGuest(ctx, name, terms); err != nil {
 		return "", "", err
 	}
 	code, err := c.OAuth.MintLoginCode(ctx, name)
 	return code, strings.TrimRight(c.Base, "/"), err
+}
+
+// dropOldTokens clears what a name's last holder left when nobody virtual holds
+// it now. A removal revokes only on a relay running a gateway, so a guest
+// removed with the gateway off keeps its tokens on disk, and they must not
+// work for whoever connects the name next, least of all a teammate.
+func (c Connector) dropOldTokens(ctx context.Context, name string) error {
+	a, ok, err := c.Dir.Agent(ctx, name)
+	if err != nil {
+		return err
+	}
+	if ok && strings.HasPrefix(a.NodeID, identity.VirtualPrefix) {
+		return nil
+	}
+	return c.OAuth.RevokeAgent(ctx, name)
 }
 
 // Revoke drops the agent's tokens.

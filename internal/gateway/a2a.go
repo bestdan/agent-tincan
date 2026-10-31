@@ -26,6 +26,7 @@ import (
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
+	"github.com/mvanhorn/agent-tincan/internal/identity"
 )
 
 const (
@@ -71,12 +72,9 @@ var a2aOtherMethods = map[string]bool{
 	"GetExtendedAgentCard": true,
 }
 
-var (
-	a2aName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	// a2aTaskID keeps a caller's id inside one relay path segment, whatever
-	// the client's escaping does. Nothing shorter or stranger is a request id.
-	a2aTaskID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-)
+// a2aTaskID keeps a caller's id inside one relay path segment, whatever the
+// client's escaping does. Nothing shorter or stranger is a request id.
+var a2aTaskID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // a2aTeammate is one published teammate. Its description goes on public cards.
 type a2aTeammate struct {
@@ -132,7 +130,7 @@ func loadA2A(path string) ([]a2aTeammate, error) {
 	}
 	seen := map[string]bool{}
 	for _, m := range c.Teammates {
-		if !a2aName.MatchString(m.Name) || seen[m.Name] {
+		if !identity.ValidName(m.Name) || seen[m.Name] {
 			return nil, fmt.Errorf("a2a.json: bad or repeated name %q", m.Name)
 		}
 		if strings.TrimSpace(m.Description) == "" {
@@ -177,7 +175,9 @@ func (g *Gateway) publishedAs(name string) (a2aTeammate, bool) {
 }
 
 // card is an agent card serving the listed teammates. It says only what
-// a2a.json says, so nothing from the roster can reach a public page.
+// a2a.json says, so nothing from the roster can reach a public page, and its
+// version is the protocol's, since the relay's build is nobody's business on
+// a page with no login.
 func (g *Gateway) card(name, description string, list []a2aTeammate) map[string]any {
 	interfaces, skills := []any{}, []any{}
 	for _, m := range list {
@@ -185,7 +185,7 @@ func (g *Gateway) card(name, description string, list []a2aTeammate) map[string]
 		skills = append(skills, map[string]any{"id": m.Name, "name": m.Name, "description": m.Description, "tags": []string{"teammate"}})
 	}
 	return map[string]any{
-		"name": name, "description": description, "version": g.version,
+		"name": name, "description": description, "version": a2aVersion,
 		"supportedInterfaces": interfaces, "skills": skills,
 		"capabilities":      map[string]any{"streaming": false, "pushNotifications": false},
 		"defaultInputModes": []string{"text/plain"}, "defaultOutputModes": []string{"text/plain"},
@@ -481,7 +481,8 @@ func (c a2aCall) getTask(ctx context.Context, params json.RawMessage) (any, *rpc
 // mark on what a teammate sends rests on its open claim, so a client that
 // could cancel delivered work could drop the mark while the teammate acts on
 // what it read, right after answering a question the owner never saw. The
-// relay refuses a claimed request itself; this also covers delivered.
+// relay refuses a claimed request itself, and a guest's request that was
+// claimed before or answered; this also covers delivered.
 func (c a2aCall) cancelTask(ctx context.Context, params json.RawMessage) (any, *rpcError) {
 	id, rerr := taskID(params)
 	if rerr != nil {

@@ -386,7 +386,7 @@ A wrapper in front of every route answers 403 with `guests may not use this rout
 | `GET /v1/requests/{id}` | Its own asks only, as for anyone. |
 | `POST /v1/requests/{id}/claim` | Relay notices only; 403 for anything else. |
 | `POST /v1/requests/{id}/answer` | As for anyone. |
-| `POST /v1/requests/{id}/cancel` | As for anyone. |
+| `POST /v1/requests/{id}/cancel` | As for anyone, except that a gateway guest gets 409 on a request that was claimed before or whose question was answered. |
 | `GET /v1/agents` | Its listed teammates, with `name`, `online`, `wake` (always `none`), `kind` and `good_at` only. |
 | `GET /v1/whoami` | `name`, `kind`, `guest_until`, and never `relay_key` or `relay_urls`. |
 | `GET /v1/hello` | As for anyone. |

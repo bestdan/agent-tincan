@@ -449,8 +449,8 @@ An admin device usually never joins, so it has no saved config. Admin and roster
 A2A is an open protocol for agents to call each other. You can let an A2A client on the open internet ask a teammate you chose. It is off by default and needs the [public gateway](#chatgpt-through-the-oauth-mcp-gateway), a file naming who is published, and a guest for the client:
 
 ```bash
-# in the relay's state directory, mode 0600
-echo '{"teammates": [{"name": "muse", "description": "Writes and edits."}]}' > a2a.json
+# in the relay's state directory. Other users must not be able to read it, or nothing is published
+(umask 077; echo '{"teammates": [{"name": "muse", "description": "Writes and edits."}]}' > a2a.json)
 tincan connect pal --guest --ask muse --for 30d
 ```
 

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/envelope"
 	"github.com/mvanhorn/agent-tincan/internal/identity"
+	"github.com/mvanhorn/agent-tincan/internal/relay"
 )
 
 const museAndGrokbot = `{"teammates":[{"name":"muse","description":"Writes and edits."},{"name":"grokbot","description":"Reads the news."}]}`
@@ -347,7 +349,7 @@ func TestA2ACardShowsOnlyWhatIsPublished(t *testing.T) {
 	if err := json.Unmarshal(raw, &card); err != nil {
 		t.Fatalf("card %s: %v", raw, err)
 	}
-	if card.Name != "muse" || card.Description != "Writes and edits." || card.Version == "" {
+	if card.Name != "muse" || card.Description != "Writes and edits." || card.Version != "1.0" {
 		t.Errorf("card = %+v", card)
 	}
 	if len(card.SupportedInterfaces) != 1 || card.SupportedInterfaces[0].URL != e.gw.URL+"/a2a/muse" ||
@@ -838,6 +840,66 @@ func TestA2ACancelStopsAtDelivery(t *testing.T) {
 	}
 }
 
+// A task that went back to the queue after a teammate had it stays out of the
+// client's reach: cancelling would stop the claim that marks what the teammate
+// sends from ever coming back.
+func TestA2ACancelStopsAfterAnAnswer(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	tok := e.guest(t, "pal", "muse").AccessToken
+	task := e.send(t, tok, "book it")
+	e.approve(t, task.ID)
+	e.claim(t, "muse", task.ID)
+	if _, err := e.m.Client(t, "muse").Reply(t.Context(), task.ID, "which day?", envelope.StatusNeedsInput); err != nil {
+		t.Fatal(err)
+	}
+	msg := textMessage("m2", "tuesday")
+	msg["taskId"] = task.ID
+	if _, rerr := e.rpc(t, tok, "SendMessage", map[string]any{"message": msg, "configuration": map[string]any{"returnImmediately": true}}); rerr != nil {
+		t.Fatalf("answer: %+v", rerr)
+	}
+	wantState(t, e.get(t, tok, task.ID), "TASK_STATE_SUBMITTED")
+	_, rerr := e.rpc(t, tok, "CancelTask", map[string]any{"id": task.ID})
+	wantCode(t, rerr, -32002)
+	wantState(t, e.get(t, tok, task.ID), "TASK_STATE_SUBMITTED")
+	if again := e.claim(t, "muse", task.ID); !again.FromGuest {
+		t.Fatalf("claim after the refused cancel = %+v", again)
+	}
+}
+
+func TestA2ACancelStopsAfterALapsedClaim(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	e := setupWith(t, relay.Config{MaxWait: 3 * time.Second, Now: clock, ClaimLease: time.Minute})
+	e.m.Store.SetClock(clock)
+	if err := os.WriteFile(e.a2a, []byte(museAndGrokbot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tok := e.guest(t, "pal", "muse").AccessToken
+	task := e.send(t, tok, "do the thing")
+	e.approve(t, task.ID)
+	e.claim(t, "muse", task.ID)
+	mu.Lock()
+	now = now.Add(2 * time.Minute)
+	mu.Unlock()
+	e.m.Server.Sweep(t.Context())
+	wantState(t, e.get(t, tok, task.ID), "TASK_STATE_SUBMITTED")
+	_, rerr := e.rpc(t, tok, "CancelTask", map[string]any{"id": task.ID})
+	wantCode(t, rerr, -32002)
+	wantState(t, e.get(t, tok, task.ID), "TASK_STATE_SUBMITTED")
+}
+
+// A task can be continued only while its question waits.
+func TestA2ASendToATaskNotWaiting(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	tok := e.guest(t, "pal", "muse").AccessToken
+	task := e.send(t, tok, "first")
+	msg := textMessage("m2", "more")
+	msg["taskId"] = task.ID
+	_, rerr := e.rpc(t, tok, "SendMessage", map[string]any{"message": msg})
+	wantCode(t, rerr, -32004)
+}
+
 // Nothing a caller controls on the public side reaches GET /v1/hello: the
 // gateway serves no such route, and a task id stays inside one path segment.
 // A proof fetched here could be passed off to a teammate looking for a moved
@@ -933,6 +995,52 @@ func TestGatewayGuestIsAGuestAtTheRelay(t *testing.T) {
 	}
 	if rec := call("GET", "/v1/agents", "", ""); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "instinct") {
 		t.Errorf("roster: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The relay itself refuses what would make a gateway guest more than a held
+// guest, whatever a client sends. The CLI never sends these.
+func TestConnectGuestRefusesNoHoldAndReplace(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	admin := e.m.Client(t, "admin")
+	terms := client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600}
+	noHold := terms
+	noHold.NoHold = true
+	if _, err := admin.ConnectGuest(t.Context(), "pal", noHold); !client.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("no_hold: %v", err)
+	}
+	if err := admin.Raw(t.Context(), "POST", "/v1/admin/connect", map[string]any{"name": "pal", "replace": true, "guest": terms}, nil); !client.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("replace: %v", err)
+	}
+	if err := admin.Raw(t.Context(), "POST", "/v1/admin/connect", map[string]any{"name": "muse", "replace": true, "guest": terms}, nil); !client.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("replace over a teammate: %v", err)
+	}
+	if _, ok, _ := e.m.Dir.Agent(t.Context(), "pal"); ok {
+		t.Fatal("a refused connect left pal behind")
+	}
+	if a, ok, _ := e.m.Dir.Agent(t.Context(), "muse"); !ok || a.Guest.Set() {
+		t.Fatalf("muse = %+v, %v", a, ok)
+	}
+}
+
+// A removal on a relay with no gateway leaves tokens on disk. They must not
+// come back to life when the name is connected again, least of all as a
+// teammate's.
+func TestConnectDropsAFormerGuestsTokens(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	s := e.guest(t, "pal", "muse")
+	if _, err := e.m.Store.DeleteAgent(t.Context(), "pal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.conn.Connect(t.Context(), "pal", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, status := e.refresh(t, s.RefreshToken, s.ClientID); status == http.StatusOK {
+		t.Fatal("a former guest's refresh token works for the teammate now holding the name")
+	}
+	status, raw, _ := e.post(t, s.AccessToken, "muse", "1.0", `{"jsonrpc":"2.0","id":1,"method":"GetTask","params":{"id":"x"}}`)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("old access token: %d %s", status, raw)
 	}
 }
 

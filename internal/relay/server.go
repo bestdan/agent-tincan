@@ -1529,7 +1529,11 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.store.Cancel(r.Context(), id, name); err != nil {
+	cancel := s.store.Cancel
+	if g, guest := guestOf(r.Context()); guest && strings.HasPrefix(g.NodeID, identity.VirtualPrefix) {
+		cancel = s.store.CancelUntaken
+	}
+	if err := cancel(r.Context(), id, name); err != nil {
 		writeErr(w, statusFor(err), err)
 		return
 	}

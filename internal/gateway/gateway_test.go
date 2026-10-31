@@ -34,7 +34,12 @@ type env struct {
 
 func setup(t *testing.T) *env {
 	t.Helper()
-	m := testrelay.New(t, relay.Config{MaxWait: 3 * time.Second})
+	return setupWith(t, relay.Config{MaxWait: 3 * time.Second})
+}
+
+func setupWith(t *testing.T, cfg relay.Config) *env {
+	t.Helper()
+	m := testrelay.New(t, cfg)
 	oauth, err := gateway.NewOAuth(m.Store.DB(), nil)
 	if err != nil {
 		t.Fatal(err)
