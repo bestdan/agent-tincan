@@ -26,3 +26,10 @@ func setWorkerProcessGroup(c *exec.Cmd) {
 		return err
 	}
 }
+
+// killWorkerGroup ends what a worker left running in its group after the
+// worker itself exited, which no context reaches: past that exit the timeout
+// has nothing to cancel, and the worker's slot and worktree are given up.
+func killWorkerGroup(c *exec.Cmd) {
+	_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+}

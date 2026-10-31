@@ -86,7 +86,9 @@ unless the process left changes or commits in it.`,
 			if err != nil {
 				return err
 			}
-			o.worktrees = filepath.Join(filepath.Dir(client.ConfigPath()), "worktrees", agentFileName(cfg.Agent))
+			if o.config, o.worktrees, err = workerPaths(cfg.Agent); err != nil {
+				return err
+			}
 			// Workers run in process groups of their own, out of reach of a
 			// signal to this one, so a signal has to stop them through ctx.
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -101,6 +103,18 @@ unless the process left changes or commits in it.`,
 	cmd.Flags().IntVar(&maxWorkers, "max-workers", 2, "with --per-request, how many processes run at once")
 	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "with --per-request, how long a process may run before it and its children are killed")
 	return cmd
+}
+
+// workerPaths returns the absolute config path workers are given, and where
+// agent's worktrees go, beside it. TINCAN_CONFIG may be relative, and neither
+// git run from the repository nor a worker in a worktree shares this
+// directory.
+func workerPaths(agent string) (config, worktrees string, err error) {
+	config, err = filepath.Abs(client.ConfigPath())
+	if err != nil {
+		return "", "", err
+	}
+	return config, filepath.Join(filepath.Dir(config), "worktrees", agentFileName(agent)), nil
 }
 
 // workerClient is a client of the saved config in session. It reads the

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -277,6 +278,18 @@ func TestPerRequestTimeoutKillsProcessGroupAndPostsFailed(t *testing.T) {
 	eventually(t, "the worker's child to die", func() bool { return !processAlive(pid) })
 }
 
+func TestPerRequestExitKillsWhatTheWorkerLeftRunning(t *testing.T) {
+	w := newWorkerRig(t, relay.Config{})
+	w.listen(w.options(`sleep 300 & echo $! > ` + w.file("child")))
+	id := w.ask("work")
+	w.result(id, envelope.StatusFailed)
+	pid, err := strconv.Atoi(strings.TrimSpace(w.read("child")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the worker's child to die", func() bool { return !processAlive(pid) })
+}
+
 func TestPerRequestStoppingTheListenerStopsWorkers(t *testing.T) {
 	w := newWorkerRig(t, relay.Config{})
 	stop := w.listen(w.options(`sleep 300 & echo $! > ` + w.file("child") + `; touch ` + w.file("ready") + `; wait`))
@@ -344,6 +357,10 @@ func TestPerRequestWorkerOutlivingItsLeaseIsNotStartedTwice(t *testing.T) {
 		requeued = requeued || st == envelope.StatusQueued
 		return requeued && st == envelope.StatusClaimed
 	})
+	// A second process would start from a later peek, so outlast a few.
+	for end := time.Now().Add(3 * listenWorkerReclaimEvery); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		w.m.Server.Sweep(t.Context())
+	}
 	if got := w.starts(); len(got) != 1 {
 		t.Fatalf("starts = %v, want one", got)
 	}
@@ -540,6 +557,86 @@ func TestPerRequestWorktrees(t *testing.T) {
 				t.Fatalf("%d worktrees, want the repo and the kept one", got)
 			}
 		})
+	}
+}
+
+// A worker confined to its tree can still rewrite the tree's .git file. The
+// listener runs git on the tree unconfined, so what that file points at must
+// not decide what git runs.
+func TestPerRequestRewrittenGitFileRunsNothingInTheListener(t *testing.T) {
+	w := newWorkerRig(t, relay.Config{})
+	repo := gitRepo(t)
+	marker := w.file("hook-ran")
+	o := w.options(`mkdir -p evil/objects evil/refs
+echo 'ref: refs/heads/main' > evil/HEAD
+printf '#!/bin/sh\ntouch ` + marker + `\n' > evil/fsmonitor
+chmod +x evil/fsmonitor
+printf '[core]\n\trepositoryformatversion = 0\n\tfsmonitor = %s\n' "$PWD/evil/fsmonitor" > evil/config
+printf 'gitdir: %s\n' "$PWD/evil" > .git
+pwd -P > ` + w.file("cwd"))
+	o.repo, o.worktrees = repo, filepath.Join(t.TempDir(), "worktrees")
+	w.listen(o)
+	id := w.ask("work")
+	w.result(id, envelope.StatusFailed)
+	eventually(t, "the kept line", func() bool { return strings.Contains(w.log.String(), "kept worktree") })
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("the listener ran the worker's program: %v", err)
+	}
+	// The rewrite does work on git run from the tree, so the check above can fail.
+	if out, err := exec.Command("git", "-C", strings.TrimSpace(w.read("cwd")), "status", "--porcelain").CombinedOutput(); err != nil {
+		t.Fatalf("git status: %v: %s", err, out)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("the rewritten .git did not take effect: %v", err)
+	}
+}
+
+func TestPerRequestHalfMadeWorktreeIsCleared(t *testing.T) {
+	w := newWorkerRig(t, relay.Config{})
+	repo := gitRepo(t)
+	hook := filepath.Join(repo, ".git", "hooks", "post-checkout")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "worktrees")
+	o := w.options(w.fixture())
+	o.repo, o.worktrees = repo, root
+	w.listen(o)
+	id := w.ask("work")
+	got := w.result(id, envelope.StatusFailed)
+	if !strings.Contains(got.Reply.Body, "worktree") {
+		t.Fatalf("failed reply: %+v", got.Reply)
+	}
+	left, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 || worktreeCount(t, repo) != 1 {
+		t.Fatalf("left behind: %v, %d worktrees", left, worktreeCount(t, repo))
+	}
+}
+
+func TestWorkerPathsAreAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("TINCAN_CONFIG", filepath.Join("conf", "client.json"))
+	config, worktrees, err := workerPaths("muse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(config) || !filepath.IsAbs(worktrees) {
+		t.Fatalf("config %q, worktrees %q", config, worktrees)
+	}
+	wantDir := filepath.Dir(config)
+	if filepath.Base(wantDir) != "conf" || !strings.HasPrefix(worktrees, wantDir+string(filepath.Separator)) {
+		t.Fatalf("config %q, worktrees %q", config, worktrees)
+	}
+	env := workerEnv(envelope.Request{ID: "r1", From: "grokbot"}, "worker-1", config)
+	if !slices.Contains(env, "TINCAN_CONFIG="+config) {
+		t.Fatalf("env %v", env)
 	}
 }
 

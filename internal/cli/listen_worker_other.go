@@ -14,3 +14,5 @@ func checkWorkerPlatform() error {
 }
 
 func setWorkerProcessGroup(*exec.Cmd) {}
+
+func killWorkerGroup(*exec.Cmd) {}

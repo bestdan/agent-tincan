@@ -46,6 +46,7 @@ type workerOptions struct {
 	exec       string
 	repo       string // "" runs workers in the listener's directory
 	worktrees  string // where worktrees of repo are made
+	config     string // absolute config path for workers, "" leaves theirs alone
 	maxWorkers int
 	timeout    time.Duration
 	// newClient returns a client whose calls come from session. A client
@@ -196,12 +197,15 @@ func runWorker(ctx context.Context, wr *client.Relay, req envelope.Request, o wo
 func runWorkerProcess(ctx, runCtx context.Context, o workerOptions, req envelope.Request, session, dir string) string {
 	c := exec.CommandContext(runCtx, "sh", "-c", o.exec)
 	c.Dir = dir
-	c.Env = append(c.Environ(), workerEnv(req, session)...)
+	c.Env = append(c.Environ(), workerEnv(req, session, o.config)...)
 	c.Stdin = strings.NewReader(workerStdin(req))
 	c.Stdout, c.Stderr = os.Stdout, os.Stderr
 	c.WaitDelay = listenWorkerWaitDelay
 	setWorkerProcessGroup(c)
 	err := c.Run()
+	if c.Process != nil {
+		killWorkerGroup(c)
+	}
 	switch {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		return fmt.Sprintf("The worker timed out after %s and was killed before it replied.", o.timeout)
@@ -218,12 +222,17 @@ func runWorkerProcess(ctx, runCtx context.Context, o workerOptions, req envelope
 
 // workerEnv is what a worker is told beyond the listener's own environment.
 // TINCAN_FROM_GUEST belongs here once requests carry the relay's guest mark.
-func workerEnv(req envelope.Request, session string) []string {
-	return []string{
+func workerEnv(req envelope.Request, session, config string) []string {
+	env := []string{
 		"TINCAN_REQUEST_ID=" + req.ID,
 		"TINCAN_SESSION=" + session,
 		"TINCAN_FROM=" + req.From,
 	}
+	if config != "" {
+		// A relative TINCAN_CONFIG would not resolve from a worktree.
+		env = append(env, "TINCAN_CONFIG="+config)
+	}
+	return env
 }
 
 // workerStdin is the request as data for the worker: its body, then only
@@ -323,9 +332,10 @@ func checkWorktreeRepo(ctx context.Context, repo string) (string, error) {
 	return abs, nil
 }
 
-// workerTree is one worker's git worktree of repo, on a detached HEAD.
+// workerTree is one worker's git worktree of repo, on a detached HEAD. gitDir
+// is the worktree's own git directory, read before the worker ran.
 type workerTree struct {
-	repo, dir, base string
+	repo, dir, gitDir, base string
 }
 
 func addWorktree(ctx context.Context, repo, root string) (*workerTree, error) {
@@ -336,25 +346,41 @@ func addWorktree(ctx context.Context, repo, root string) (*workerTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	if out, err := git(ctx, repo, "worktree", "add", "-q", "--detach", dir, "HEAD"); err != nil {
-		_ = os.Remove(dir)
+	out, err := git(ctx, repo, "worktree", "add", "-q", "--detach", dir, "HEAD")
+	if err == nil {
+		out, err = git(ctx, dir, "rev-parse", "--absolute-git-dir", "HEAD")
+	}
+	if err != nil {
+		discardWorktree(ctx, repo, dir)
 		return nil, fmt.Errorf("%w: %s", err, out)
 	}
-	base, err := git(ctx, dir, "rev-parse", "HEAD")
-	if err != nil {
-		return nil, err
-	}
-	return &workerTree{repo: repo, dir: dir, base: base}, nil
+	gitDir, base, _ := strings.Cut(out, "\n")
+	return &workerTree{repo: repo, dir: dir, gitDir: gitDir, base: base}, nil
+}
+
+// discardWorktree clears a worktree no worker has run in, which may be half
+// made. ctx may have ended, which may be why it is half made.
+func discardWorktree(ctx context.Context, repo, dir string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), listenWorkerReplyWindow)
+	defer cancel()
+	_, _ = git(ctx, repo, "worktree", "remove", "--force", dir)
+	_ = os.RemoveAll(dir)
 }
 
 // remove takes the worktree away when the worker left nothing in it. On a
 // detached HEAD a new commit has no branch to keep it, so it counts as
 // something left. git worktree remove refuses a dirty tree by itself, and it
 // is never forced.
+//
+// The worker can rewrite the tree's .git file, and git run from the tree would
+// then take its config, and run its programs, from wherever that points. So
+// the checks use the git directory recorded before the worker ran, and skip
+// submodules, whose .git is also the worker's. A rewritten .git makes the
+// remove refuse too, which keeps the tree.
 func (w *workerTree) remove(ctx context.Context, id string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), listenWorkerReplyWindow)
 	defer cancel()
-	switch status, err := git(ctx, w.dir, "status", "--porcelain"); {
+	switch status, err := git(ctx, w.repo, "--git-dir="+w.gitDir, "--work-tree="+w.dir, "status", "--porcelain", "--ignore-submodules=all"); {
 	case err != nil:
 		listenLogf("request %s: kept worktree %s: %v", id, w.dir, err)
 		return
@@ -362,7 +388,7 @@ func (w *workerTree) remove(ctx context.Context, id string) {
 		listenLogf("request %s: kept worktree %s: it has uncommitted changes", id, w.dir)
 		return
 	}
-	if head, err := git(ctx, w.dir, "rev-parse", "HEAD"); err != nil || head != w.base {
+	if head, err := git(ctx, w.repo, "--git-dir="+w.gitDir, "rev-parse", "HEAD"); err != nil || head != w.base {
 		listenLogf("request %s: kept worktree %s: it has new commits", id, w.dir)
 		return
 	}
