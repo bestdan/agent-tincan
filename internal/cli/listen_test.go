@@ -173,7 +173,13 @@ func (f *fakeListenRelay) presencePeeks() []time.Time {
 
 func newFakeListenRelay(t *testing.T, f *fakeListenRelay) *client.Relay {
 	t.Helper()
-	ts := httptest.NewServer(f)
+	return newFakeListenRelayHandler(t, f.ServeHTTP)
+}
+
+// newFakeListenRelayHandler is a client of a relay made of h alone.
+func newFakeListenRelayHandler(t *testing.T, h http.HandlerFunc) *client.Relay {
+	t.Helper()
+	ts := httptest.NewServer(h)
 	t.Cleanup(ts.Close)
 	r, err := client.NewRelay(ts.URL, "")
 	if err != nil {

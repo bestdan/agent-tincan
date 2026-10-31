@@ -7,7 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -18,7 +21,10 @@ import (
 
 func listenCmd() *cobra.Command {
 	var execCmd string
-	var once bool
+	var once, perRequest bool
+	var worktree string
+	var maxWorkers int
+	var timeout time.Duration
 	cmd := &cobra.Command{
 		Use:   "listen --exec <command>",
 		Short: "Stay connected and run a command whenever teammates' requests or replies are waiting",
@@ -31,21 +37,85 @@ in TINCAN_UPGRADE_AVAILABLE (empty on other nudges), even if TINCAN_WAITING is z
 
 Use this for agents whose runtime stays up and can be nudged by a command,
 for example opening a Claude Code session in cmux. For agents that get a new
-turn when a background command exits (Muse), use "tincan wait" instead.`,
+turn when a background command exits (Muse), use "tincan wait" instead.
+
+With --per-request the listener takes the requests itself: it starts one fresh
+process through "sh -c" for each ask, unattended, as this agent. The process
+gets the request body on stdin, and TINCAN_REQUEST_ID, TINCAN_FROM and its own
+TINCAN_SESSION in its environment, and replies with "tincan reply". One that
+exits without replying fails the request with its exit code. Pings are answered
+as usual, and notifies and replies stay for the agent's inbox. --worktree runs
+each process in its own new git worktree of a repository, removed afterwards
+unless the process left changes or commits in it.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if execCmd == "" {
 				return errors.New("--exec is required")
 			}
-			r, _, err := connect()
+			if !perRequest {
+				for _, name := range []string{"worktree", "max-workers", "timeout"} {
+					if cmd.Flags().Changed(name) {
+						return fmt.Errorf("--%s needs --per-request", name)
+					}
+				}
+				r, _, err := connect()
+				if err != nil {
+					return err
+				}
+				return listen(cmd.Context(), r, execCmd, once)
+			}
+			if err := checkWorkerPlatform(); err != nil {
+				return err
+			}
+			if once {
+				return errors.New("--once does not apply to --per-request")
+			}
+			if maxWorkers < 1 {
+				return errors.New("--max-workers must be at least 1")
+			}
+			if timeout <= 0 {
+				return errors.New("--timeout must be longer than zero")
+			}
+			o := workerOptions{exec: execCmd, maxWorkers: maxWorkers, timeout: timeout, newClient: workerClient}
+			if worktree != "" {
+				var err error
+				if o.repo, err = checkWorktreeRepo(cmd.Context(), worktree); err != nil {
+					return err
+				}
+			}
+			r, cfg, err := connect()
 			if err != nil {
 				return err
 			}
-			return listen(cmd.Context(), r, execCmd, once)
+			o.worktrees = filepath.Join(filepath.Dir(client.ConfigPath()), "worktrees", agentFileName(cfg.Agent))
+			// Workers run in process groups of their own, out of reach of a
+			// signal to this one, so a signal has to stop them through ctx.
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+			return listenPerRequest(ctx, r, o)
 		},
 	}
 	cmd.Flags().StringVar(&execCmd, "exec", "", "command to run when requests or replies are waiting")
 	cmd.Flags().BoolVar(&once, "once", false, "exit after the first nudge")
+	cmd.Flags().BoolVar(&perRequest, "per-request", false, "take each ask and run --exec once for it, as a fresh unattended process")
+	cmd.Flags().StringVar(&worktree, "worktree", "", "with --per-request, run each process in a new git worktree of this repository")
+	cmd.Flags().IntVar(&maxWorkers, "max-workers", 2, "with --per-request, how many processes run at once")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Minute, "with --per-request, how long a process may run before it and its children are killed")
 	return cmd
+}
+
+// workerClient is a client of the saved config in session. It reads the
+// config each time, so a worker follows a relay that moved under this
+// listener.
+func workerClient(session string) (*client.Relay, error) {
+	cfg, err := client.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	r, err := client.NewRelayFor(cfg)
+	if err == nil {
+		r.SetSession(session)
+	}
+	return r, err
 }
 
 // listen's timing and log. Tests override them.
@@ -85,18 +155,7 @@ func listen(ctx context.Context, r *client.Relay, execCmd string, once bool) err
 			backoff = min(backoff*2, 30*time.Second)
 			continue
 		}
-		pingFailed := false
-		for _, pending := range w.Pending {
-			if pending.Kind != envelope.KindPing {
-				continue
-			}
-			_, retry, err := client.AnswerPings(ctx, r, client.Inbox{Requests: []envelope.Request{{ID: pending.ID, Kind: envelope.KindPing}}}, "listen")
-			if err != nil {
-				pingFailed = true
-			}
-			retries.Go(ctx, retry)
-		}
-		if pingFailed && n <= 0 {
+		if answerPendingPings(ctx, r, w.Pending, &retries) && n <= 0 {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -128,6 +187,22 @@ func listen(ctx context.Context, r *client.Relay, execCmd string, once bool) err
 			return nil
 		}
 	}
+}
+
+// answerPendingPings answers the pings in a peek's pending list and reports
+// whether any failed. Failed pongs retry on retries.
+func answerPendingPings(ctx context.Context, r *client.Relay, pending []envelope.Pending, retries *client.PongRetries) (failed bool) {
+	for _, p := range pending {
+		if p.Kind != envelope.KindPing {
+			continue
+		}
+		_, retry, err := client.AnswerPings(ctx, r, client.Inbox{Requests: []envelope.Request{{ID: p.ID, Kind: envelope.KindPing}}}, "listen")
+		if err != nil {
+			failed = true
+		}
+		retries.Go(ctx, retry)
+	}
+	return failed
 }
 
 // nudge runs the command for n waiting items and then, unless once, waits

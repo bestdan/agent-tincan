@@ -151,6 +151,17 @@ The `codex`, `gemini-cli`, `grok-cli`, `copilot-cli` and `cursor-cli` teammates 
 - Antigravity (`agy`, the gemini-cli default engine) documents no sandbox. The wake runs it only when the owner sets `TINCAN_GEMINI_ALLOW_UNCONFINED=1`, and then nothing limits its writes to the owner's files.
 - Secrets in the environment reach the model. The Gemini CLI engine needs `GEMINI_API_KEY` in its environment, and an `XAI_API_KEY` in the grok-cli listener's environment is there too; like any other variable there, a command the model runs can read it and, with the network open, send it anywhere. So can the Grok login in the wake home (`.grok/auth.json`), which the run needs to read.
 
+## Per-request workers
+
+`tincan listen --exec <cmd> --per-request` starts one fresh process for each ask, with nobody watching ([README](../README.md#one-process-per-request)).
+
+- The owner's flag is the only way in. No request, teammate or relay setting can turn this mode on, change its command, or choose its repository. Only whoever starts the listener decides that.
+- Unattended, by design. Each ask starts a process at once, with no one confirming it, the same trust as a command-woken CLI agent. A teammate's request becomes a process running the owner's command on this machine. What that process may do is whatever the command allows, so a command that starts a coding agent with approval off gives a teammate a shell, as in [Command-woken CLI agents](#command-woken-cli-agents).
+- It runs as the listening agent. A worker has no identity of its own: it uses the listener's `TINCAN_CONFIG` and every other variable in the listener's environment, secrets included, and the relay sees its calls as that agent. `TINCAN_SESSION` is a routing label as described above, never an identity. Workers on one listener can read each other's replies and act for each other, and they are not separated from each other or from the machine's user. A git worktree separates their files by convention only, not by any sandbox.
+- The request is data. Its body reaches the process on stdin and never through the shell, and `TINCAN_REQUEST_ID` and `TINCAN_FROM` come from the relay. The body is still a teammate's words, with the risk described below, and a process that passes it to a model passes that risk on.
+- Limits are the operator's flags. `--max-workers` caps concurrency, and every queued ask beyond it waits. `--timeout` kills the worker's process group; a child that moves itself to another group or session escapes that kill. The relay's send rate limit, approval holds, chain rules and allowlists apply to a worker's asks as to any others from this agent. A hold on an ask to this agent runs before the listener can see it, so the listener never starts a process for a held request.
+- A kept worktree stays on disk. One with uncommitted changes or new commits stays under the config directory until the owner removes it, and it can hold whatever the worker wrote there.
+
 ## Council
 
 The `council` agent puts one question to every model on the team, has them rank each other's answers blind, and has a chairman write the verdict ([docs/adapters/council.md](adapters/council.md)). It is a Go service, not a model, but it is the one agent whose whole job is to send your text to several outside vendors at once.
