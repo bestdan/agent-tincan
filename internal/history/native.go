@@ -1174,8 +1174,7 @@ func chromeRunning() bool {
 		if err == nil {
 			return true
 		}
-		var ee *exec.ExitError
-		if !errors.As(err, &ee) {
+		if _, ok := errors.AsType[*exec.ExitError](err); !ok {
 			return true
 		}
 	}

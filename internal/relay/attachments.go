@@ -202,8 +202,7 @@ func (s *Server) writeBlob(r *http.Request, dir, id string) (client.UploadedAtta
 	head := &headBuffer{}
 	n, err := io.Copy(io.MultiWriter(tmp, h, head), r.Body)
 	if err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
+		if tooBig, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			return client.UploadedAttachment{}, http.StatusRequestEntityTooLarge, fmt.Errorf("attachment is larger than %d bytes", tooBig.Limit)
 		}
 		return client.UploadedAttachment{}, http.StatusBadRequest, fmt.Errorf("read upload: %w", err)

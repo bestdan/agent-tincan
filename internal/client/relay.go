@@ -1268,7 +1268,7 @@ func (r *Relay) GetGroup(ctx context.Context, id string, wait time.Duration) (Gr
 			if found {
 				continue
 			}
-			entry := GroupEntry{Result: Result{Request: envelope.Request{ID: member.ID, To: member.To}}}
+			entry := GroupEntry{Request: envelope.Request{ID: member.ID, To: member.To}}
 			if replace >= 0 {
 				g.Results[replace] = entry
 			} else {
