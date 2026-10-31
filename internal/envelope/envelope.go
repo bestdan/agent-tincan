@@ -124,6 +124,10 @@ type Request struct {
 	// FromSession is the sender's session label (SessionHeader), a
 	// relay-only routing label inside one agent, never an identity.
 	FromSession string `json:"-"`
+	// NoParent starts a new chain whatever claims the sender holds. Only the
+	// relay sets it, on a scheduled ask's fire: the claim the asker holds at
+	// fire time has nothing to do with an ask made earlier.
+	NoParent bool `json:"-"`
 }
 
 // RedactFor hides content that the owner has never released to other agents.
@@ -518,6 +522,23 @@ const (
 	WebSignedOut     = "signed_out"
 	WebLimited       = "limited"
 )
+
+// Schedule is an ask the relay sends later, once or on a repeat. A one-shot
+// has no EverySeconds and goes when it fires. LastRequest is the request
+// its latest fire made, and Blocked is set while its latest fire was
+// rejected.
+type Schedule struct {
+	ID           int64     `json:"id"`
+	From         string    `json:"from"`
+	To           string    `json:"to"`
+	Body         string    `json:"body"`
+	Urgent       bool      `json:"urgent,omitempty"`
+	NextAt       time.Time `json:"next_at"`
+	EverySeconds int64     `json:"every_seconds,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastRequest  string    `json:"last_request,omitempty"`
+	Blocked      bool      `json:"blocked,omitempty"`
+}
 
 // MaxRoomPost caps a room post's body in bytes.
 const MaxRoomPost = 16 << 10

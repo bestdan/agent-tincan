@@ -416,6 +416,38 @@ A mention's text belongs to its room. A mention continues the poster's chain, so
 
 Audit rows `room_created`, `room_member_added`, `room_member_removed` and `room_posted` carry the room, ids, agent names and byte counts, never post text. Rooms live in `rooms`, `room_members` and `room_posts` tables, with no foreign key to `agents`, and a nullable `room_post_id` column on `requests`; an older relay opening the database ignores them, and mentions stop mirroring until the newer relay is back.
 
+## Scheduled asks
+
+A scheduled ask is an ask the relay sends later, once or on a repeat. The relay advertises `"schedules": true` in `GET /v1/capabilities`. Clients check it before every schedule call and refuse without it (`relay does not support scheduled asks, so nothing was sent`): they never fall back to `POST /v1/send`, because an older relay would send the ask at once.
+
+`POST /v1/schedules` takes the fields of a send plus a time, and answers 201 with the schedule. The owner is the authenticated caller.
+
+| Field | Meaning |
+|---|---|
+| `to` | Target agent. One agent, checked like a send: an unknown agent answers 404, and a phone 400. |
+| `body` | The ask's text, as for a send. |
+| `urgent` | Optional, as for a send. Each fire spends the sender's urgent allowance. |
+| `at` | Optional RFC 3339 time of the first fire. Must be in the future. |
+| `every_seconds` | Optional repeat, from 900 (15 minutes) to 31622400 (366 days). Without `at` the first fire is one interval from now. |
+
+One of `at` and `every_seconds` is required. `parent_id`, `group`, `also`, `attachments` and any `kind` but `ask` are refused with 400: a fire starts a new chain, goes to one teammate and carries no files. A caller with an open claim is refused with 409, by the lookup a send uses to continue a chain (the session's own claim, else the agent's one claim). An agent has at most 32 live schedules; the 33rd is refused with 409. Nothing is checked against `approval.json` here: the owner's holds apply at fire time.
+
+A schedule is `{"id", "from", "to", "body", "urgent", "next_at", "every_seconds", "created_at", "last_request", "blocked"}`. `urgent`, `every_seconds`, `last_request` (the request its latest fire made) and `blocked` (its latest fire was rejected) are left out when empty. Ids are never reused.
+
+`GET /v1/schedules` answers `{"schedules": [...]}` with the caller's schedules, and with `?all=1` every agent's, for an admin device or the local admin socket (403 otherwise). `DELETE /v1/schedules/{id}` stops one and answers 200 with it. A joined agent can stop only its own: anything else answers 404, as an unknown id does. An admin device or the local admin socket can stop any. A request a fire already sent is not touched; cancel it by its id.
+
+The relay fires what is due on every sweep, its periodic pass over expiries and leases, which approve, deny and `GET /v1/admin/held` also run. A fire:
+
+1. Moves the schedule first: a one-shot is deleted, and a recurring schedule moves to its next time after now, in one update conditional on the `next_at` it read. Only the sweep that won that update goes on, so racing sweeps send once. A relay that stops between this step and the next loses that occurrence rather than sending it twice.
+2. Skips the occurrence, for a recurring schedule, while `last_request` is open (held, queued, delivered, claimed or needing input).
+3. Checks the target as a send does, then sends through the path a send takes: loop, hop and rate checks, the owner's holds, delivery, wake and failover. The request has a new `id` and trace, `hop` 1 and `chain` of the owner alone, whatever claims the owner holds. Its TTL runs from the fire. Client fields cannot ask for this: only the relay starts a chain this way.
+
+Occurrences missed while the relay was down fire once, then the next time lands after now on the schedule's own cadence, with no catch-up burst.
+
+A rejected fire is not retried. A one-shot is gone and its owner gets a relay notice naming the schedule, the target and the reason, never the text. A recurring schedule stays, sets `blocked`, and tries again at its next time; the notice goes out once per run of rejections, and a fire that goes through ends the run.
+
+Removing the owner or the target deletes the schedule. Audit rows `schedule_created`, `schedule_fired`, `schedule_skipped`, `schedule_blocked` and `schedule_cancelled` carry ids, agent names, times and the reason, never the text. Schedules live in a `schedules` table with no foreign key to `agents`; an older relay opening the database ignores it, and nothing fires until the newer relay is back.
+
 ## Recipient facts on send
 
 The `POST /v1/send` response is the queued request with one optional extra field, `target`, set when the recipient is on wake method `schedule`: `{"check_every_seconds": 300, "expect_reply_seconds": 600, "overdue": false}`, or on `webhook` or `email` and woken before: `{"woken_at": "...", "wake_result": "ok", "unanswered": true}`, with the roster's meanings. Those fields are omitted for other recipients, for requests held for owner approval, and by older relays, which older clients ignore. The relay does not store it, and `GET /v1/requests/{id}` never returns it; the tincan client copies it from the send response onto the result an ask returns, so the pending-reply text can say when to expect an answer.

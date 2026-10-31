@@ -54,7 +54,11 @@ type Capabilities struct {
 	// /v1/requests/{id}/handback) and moves it to another web agent.
 	Handback bool `json:"handback,omitempty"`
 	// Rooms is set by a relay that serves rooms (/v1/rooms).
-	Rooms              bool  `json:"rooms,omitempty"`
+	Rooms bool `json:"rooms,omitempty"`
+	// Schedules is set by a relay that takes scheduled asks (/v1/schedules).
+	// An older relay has no such route, so a client must never fall back to
+	// a send, which would go at once.
+	Schedules          bool  `json:"schedules,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`
