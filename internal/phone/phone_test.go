@@ -236,6 +236,19 @@ func TestRoomQuestionNamesRequest(t *testing.T) {
 	}
 }
 
+// A held card rebuilds when the relay's text for it changes: approval needs
+// the whole text showing, so a card must not stay on a cut preview once the
+// relay hands it a fresh nonce for the full body.
+func TestHeldCardFollowsItsText(t *testing.T) {
+	app := read(t, "app.js")
+	if body := funcBody(t, app, "heldText"); !strings.Contains(body, "item.body") || !strings.Contains(body, "item.then.body") {
+		t.Error("heldText must cover the body and the follow-on text")
+	}
+	if body := funcBody(t, app, "mergeHeld"); !strings.Contains(body, "heldText(old) !== heldText(item)") || !strings.Contains(body, "replaceWith(heldCard(entry))") {
+		t.Error("mergeHeld must rebuild a card whose text changed")
+	}
+}
+
 // funcBody is the source of the top-level function name in src, up to its
 // closing brace at the start of a line.
 func funcBody(t *testing.T, src, name string) string {
