@@ -207,7 +207,7 @@ func TestGuestSendFieldsAreDefaultDeny(t *testing.T) {
 		"urgent":     {"urgent": true},
 		"parent_id":  {"parent_id": "abc"},
 		"attachment": {"attachments": []map[string]string{{"id": "a1"}}},
-		"to_project": {"to_project": "tincan"},
+		"project":    {"project": "tincan"},
 		"from_guest": {"from_guest": false, "guest_approved": true},
 		"future":     {"some_later_field": 1},
 		"spelling":   {"Then": map[string]string{"to": "instinct", "body": "x"}},
