@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -180,15 +181,35 @@ func joinCmd() *cobra.Command {
 }
 
 func inviteCmd() *cobra.Command {
-	var relayURL, socket, kind string
+	var relayURL, socket, kind, guestFor string
+	var guest, noHold bool
+	var guestAsk []string
 	cmd := &cobra.Command{
 		Use:   "invite <name>",
 		Short: "Create a one-time code that joins a machine as <name> (admin devices only)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if !guest && (len(guestAsk) > 0 || guestFor != "" || noHold) {
+				return errors.New("--ask, --for and --no-hold need --guest")
+			}
+			var in client.GuestInvite
+			if guest {
+				var err error
+				if in, err = guestInvite(kind, guestAsk, guestFor, noHold); err != nil {
+					return err
+				}
+			}
 			r, err := adminRelay(socket, relayURL)
 			if err != nil {
 				return err
+			}
+			if guest {
+				inv, err := r.InviteGuest(cmd.Context(), args[0], in)
+				if err != nil {
+					return err
+				}
+				printGuestInvite(cmd, args[0], inv, guestRelayURL(cmd.Context(), r, relayURL, socket))
+				return nil
 			}
 			code, err := r.InviteKind(cmd.Context(), args[0], kind)
 			if err != nil {
@@ -220,7 +241,69 @@ func inviteCmd() *cobra.Command {
 	cmd.Flags().StringVar(&relayURL, "relay", "", "relay URL (default: saved config)")
 	cmd.Flags().StringVar(&socket, "socket", "", "relay admin socket (when running on the relay host)")
 	cmd.Flags().StringVar(&kind, "kind", "", "the agent's runtime (hermes, codex, ...), recorded on join so tincan onboard tailors its block")
+	cmd.Flags().BoolVar(&guest, "guest", false, "invite someone outside the team, who may only ask the teammates in --ask, until --for runs out")
+	cmd.Flags().StringSliceVar(&guestAsk, "ask", nil, "with --guest: the teammates the guest may ask")
+	cmd.Flags().StringVar(&guestFor, "for", "", "with --guest: how long the guest lasts, such as 12h or 7d (30 days at most)")
+	cmd.Flags().BoolVar(&noHold, "no-hold", false, "with --guest: do not hold this guest's asks for your approval (approval.json still applies)")
 	return cmd
+}
+
+// guestInvite reads invite's guest flags.
+func guestInvite(kind string, ask []string, term string, noHold bool) (client.GuestInvite, error) {
+	switch {
+	case kind != "":
+		return client.GuestInvite{}, errors.New("a guest takes no --kind")
+	case len(ask) == 0:
+		return client.GuestInvite{}, errors.New("--guest needs --ask, the teammates the guest may ask")
+	case term == "":
+		return client.GuestInvite{}, errors.New("--guest needs --for, how long the guest lasts, such as 12h or 7d")
+	}
+	d, err := guestTerm(term)
+	if err != nil {
+		return client.GuestInvite{}, err
+	}
+	return client.GuestInvite{Ask: ask, ForSeconds: int64(d / time.Second), NoHold: noHold}, nil
+}
+
+// guestTerm reads a Go duration, or a whole number of days such as 7d.
+func guestTerm(term string) (time.Duration, error) {
+	if days, ok := strings.CutSuffix(term, "d"); ok {
+		if n, err := strconv.Atoi(days); err == nil && n > 0 {
+			return time.Duration(n) * 24 * time.Hour, nil
+		}
+	}
+	d, err := time.ParseDuration(term)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("--for %q: use a time such as 12h or 7d", term)
+	}
+	return d, nil
+}
+
+// guestRelayURL is the address a guest joins by. A guest is on another
+// tailnet, where a short machine name means nothing, so the relay's own full
+// address wins over the one the owner reaches it by.
+func guestRelayURL(ctx context.Context, r *client.Relay, relayURL, socket string) string {
+	var urls struct {
+		RelayURLs []string `json:"relay_urls"`
+	}
+	if r.Raw(ctx, "GET", "/v1/admin/urls", nil, &urls) == nil && len(urls.RelayURLs) > 0 {
+		return urls.RelayURLs[0]
+	}
+	return inviteRelayURL(relayURL, socket)
+}
+
+// printGuestInvite gives the owner the code and what has to happen on the
+// tailnet for it to work.
+func printGuestInvite(cmd *cobra.Command, name string, inv client.GuestInvited, relay string) {
+	cmd.Printf("Guest invite code for %q (valid 10 minutes): %s\n", name, inv.Code)
+	cmd.Printf("Lasts until %s, and may ask: %s.\n\n", inv.GuestUntil.Local().Format(time.RFC1123), strings.Join(inv.GuestAsks, ", "))
+	cmd.Printf("1. Share the relay machine with the guest's Tailscale account, from the machine's Share option in the Tailscale admin console.\n" +
+		"   Share in this direction only: a guest's machine shared into your tailnet is quarantined and cannot reach the relay.\n")
+	cmd.Printf("2. Once they accept the share, have them run:\n  tincan join %s --relay %s\n\n", inv.Code, relay)
+	cmd.Printf("Its asks wait for you in tincan held, unless this guest has --no-hold.\n")
+	if !inv.HoldAlerts {
+		cmd.Printf("Warning: nothing will tell you when a guest's ask is held. Set notify in approval.json or subscribe a phone to push, or check tincan held yourself.\n")
+	}
 }
 
 // olderRelayKind turns a relay's "unknown kind" rejection of a kind this
@@ -975,6 +1058,9 @@ func heldCmd() *cobra.Command {
 					to += " (" + req.ToKind + ")"
 				}
 				cmd.Printf("%s  %s -> %s  chain=%s  %s\n", req.ID, req.From, to, strings.Join(req.Chain, " -> "), req.Body)
+				if req.FromGuest {
+					cmd.Printf("  guest: a guest's ask, or work that follows from one\n")
+				}
 				switch {
 				case req.Pass != nil:
 					cmd.Printf("  pass: %s conversation %s -> %s\n", history.SourceLabel(history.Source(req.Pass.Source)), req.Pass.ConversationID, req.Pass.To)

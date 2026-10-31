@@ -57,7 +57,11 @@ type Capabilities struct {
 	Rooms bool `json:"rooms,omitempty"`
 	// Then is set by a relay that takes a follow-on on a send. An older
 	// relay ignores the field, so a client sends it only when this is set.
-	Then               bool  `json:"then,omitempty"`
+	Then bool `json:"then,omitempty"`
+	// Guests is set by a relay that honors a guest invite. An older relay
+	// ignores the field and mints a full teammate, so a client never sends
+	// one without this.
+	Guests             bool  `json:"guests,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`

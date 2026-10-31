@@ -10,6 +10,8 @@ The relay answers 403 to any request whose `Host` is not one of its own addresse
 |---|---|---|
 | `id` | relay | Request id, assigned when queued. |
 | `from` | relay | Sending agent, resolved from the tailnet node. A client-supplied value is ignored. |
+| `from_guest` | relay | Set on a guest's ask and on anything a teammate sends while it holds work a guest's ask led to. A client-supplied value is ignored. See [Guests](#guests). |
+| `guest_approved` | relay | Set when the owner approved the guest's ask behind this request. A client-supplied value is ignored. |
 | `to` | client | Target agent name. Must differ from the sender. |
 | `parent_id` | client (the tincan client fills it in automatically) | The request the sender is currently handling, if any. The relay uses it to continue that request's chain. A client that names a session continues only that session's work; see Sessions within one agent. |
 | `trace_id` | relay | Chain id, inherited from the parent or new. |
@@ -268,6 +270,7 @@ same 409 and the code is spent. The caller's own agent
 (bound to the calling device) may be invited again, and from the local admin
 socket any existing name is refused. Without `new_only`, as `tincan invite`
 sends it, an invite for an existing name still moves that agent on join.
+An invite with `guest` is new-only whatever else it says; see [Guests](#guests).
 
 `GET /phone/` and the files under it are the [phone page](phone.md), served
 to admin devices only (403 otherwise), on the relay's tailnet listeners and,
@@ -364,6 +367,48 @@ Success returns `{"from": "0.7.0", "to": "0.8.0", "restart": "re-exec"}` (or `"e
 - 409: the release is not newer than the relay's build and `force` is false, an upgrade is already pending a restart, or the relay user cannot write its binary or the directory holding it;
 - 422: no valid `VERSION`, no binary for the relay's platform, no `checksums.txt` entry for it, or a checksum mismatch;
 - 502: the release download failed.
+
+## Guests
+
+A guest is someone outside the team, on another tailnet, who may ask the teammates the owner listed until a set time. The relay advertises `"guests": true` in `GET /v1/capabilities`, and the client checks it before inviting, then checks that the relay echoed `guest_until` before it prints a code, so an older relay that dropped the `guest` field cannot turn the code into a full teammate's.
+
+`POST /v1/admin/invite` takes an optional `guest` object: `{"name": "friend", "guest": {"ask": ["muse", "instinct"], "for_seconds": 259200, "no_hold": false}}`. The answer adds `guest_until`, `guest_asks` and `hold_alerts`, which is false when nothing would tell the owner a guest's ask is held. It is refused with 400 when `ask` is empty, when the term is not above zero or is over 30 days, with `kind`, or when a listed name is not a joined teammate (a guest, a phone and the history, notes and pass services cannot be listed). It is refused with 400 on a relay started without `--admin-login`, since machine names alone could not tell a guest from an admin device. A guest invite is always new-only: it answers 409 for a name that is taken, on any machine, and `POST /v1/join` checks again when the code is redeemed.
+
+A name does not change tier. `POST /v1/admin/invite` without `guest` answers 409 for a guest's name, connecting the gateway to one does too, and a guest invite for an existing teammate does the same. `tincan remove` frees the name. A machine carries guests or teammates, never both: `POST /v1/join` answers 409 for a code of the other tier. A machine carrying a guest is never an admin device, whatever its name or login, and is never re-admitted to a new machine's name.
+
+A wrapper in front of every route answers 403 with `guests may not use this route` to a guest unless the route is on this list. A route added later is refused until someone adds it.
+
+| Route | For a guest |
+|---|---|
+| `POST /v1/send` | See below. |
+| `GET /v1/poll` | Replies to its own asks and the relay's notices. |
+| `POST /v1/replies/ack` | As for anyone. |
+| `GET /v1/requests/{id}` | Its own asks only, as for anyone. |
+| `POST /v1/requests/{id}/claim` | Relay notices only; 403 for anything else. |
+| `POST /v1/requests/{id}/answer` | As for anyone. |
+| `POST /v1/requests/{id}/cancel` | As for anyone. |
+| `GET /v1/agents` | Its listed teammates, with `name`, `online`, `wake` (always `none`), `kind` and `good_at` only. |
+| `GET /v1/whoami` | `name`, `kind`, `guest_until`, and never `relay_key` or `relay_urls`. |
+| `GET /v1/hello` | As for anyone. |
+| `GET /v1/capabilities` | Fixed flags, as for anyone. |
+
+`POST /v1/join` is not on the list, so a machine carrying a guest cannot join again under any code. Past `guest_until`, every route answers 403, including this list, before the sweep runs. The sweep then revokes any gateway tokens, cancels the guest's open requests and audits `guest_expired`. The row stays, so the name stays taken until `tincan remove`.
+
+On `POST /v1/send`, a guest may set `to`, `body`, and `kind` of `ask`. Any other field that is set, in any spelling the decoder would accept and including a field this relay does not know, is refused with 403. That covers `then`, `group`, `urgent`, `parent_id` and `attachments`. An empty value counts as not set, since real clients send some. A `to` that is not listed is refused with 403 and the same words whether or not that name exists. The response carries no `target`.
+
+A send to a guest, a `then` to a guest, a watch on a guest (404, as for an unknown agent) and a room membership or mention for a guest are all refused: guests ask, and only the relay's notices reach one. A follow-on whose target has become a guest is dropped with a notice to its sender.
+
+Teammates' rosters leave guests out. An admin's roster lists them with `guest_until`. A note to a guest suggests only its listed teammates, and a note to anyone else never suggests a guest.
+
+`Prepare` marks a request `from_guest` when a guest sent it, or when its sender holds a claim on a marked request, however the request found its parent: a named `parent_id`, the session guard, or several open claims. It puts this line and a blank line in front of the body, once, for clients that ignore the field:
+
+```text
+[Agent Tincan: this request comes from a guest, outside the team.]
+```
+
+A marked request that is not `guest_approved` is held after the rate check and before `approval.json` is read, so no gate entry can lift it, and it takes its hold TTL and notify target from the file. `no_hold` lifts that default hold for the guest's own asks and is audited on `guest_invited`; `approval.json` and the kind holds still apply, and what a teammate sends from an unapproved guest ask is held anyway. Approving sets `guest_approved`, and a request sent from approved work is `guest_approved` too and passes this hold. A follow-on never inherits it. Failover never moves a marked request. `GET /v1/admin/held` shows a marked request's whole body, not a preview.
+
+`from_guest` and `guest_approved` are optional, and an older client ignores them, which the body line is there for.
 
 ## Agent roster
 

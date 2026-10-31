@@ -31,7 +31,7 @@ An email-woken agent such as Instinct can lose its tailnet path for long stretch
   - AgentMail did not mark the message spam or unauthenticated.
   - The subject's tag verifies for that request, agent and current clarification round.
   - The request is still open and not claimed under a live lease.
-- The tag is an HMAC under `email-tag-key`, a 32-byte file in the relay's state dir (0600). That file never leaves the relay and is separate from `relay.key`, which every joined agent holds. Rotating `email-tag-key` voids every outstanding tag.
+- The tag is an HMAC under `email-tag-key`, a 32-byte file in the relay's state dir (0600). That file never leaves the relay and is separate from `relay.key`, which every joined teammate holds (a guest does not). Rotating `email-tag-key` voids every outstanding tag.
 - What an attacker needs: the ability to send mail as the agent's address that AgentMail accepts as authenticated, plus a live tag. Tags exist only in the agent's mailbox, the sending inbox and the relay. One tag can answer one open request, and dies when the request closes or its clarification round changes.
 - Limits on email answers: email can answer, fail or decline a request. It cannot ask a clarifying question or attach files. Every tagged message from the agent gets one in-thread "recorded" or "not recorded" email with no request or reply text. The relay never deletes, marks or relabels mail, so other readers of a shared inbox see their mail unchanged. Audit rows record `via: email`, never the tag, the address or the text.
 
@@ -178,6 +178,31 @@ The `council` agent puts one question to every model on the team, has them rank 
 - Fired once. The row is marked due in the reply's transaction and deleted in the transaction that enqueues the follow-on or its notice. Only an answered reply fires it. A request that ends any other way drops it, and a removed asker's follow-on is dropped unsent.
 - The audit log records `follow_on_sent` and `follow_on_dropped` with ids, names and a reason, never text.
 
+## Guests
+
+`tincan invite friend --guest --ask muse,instinct --for 3d` lets someone outside the team ask the teammates you list, until a set time of at most 30 days. Tailscale is still the boundary, and a guest is a new kind of caller inside it, so this section says what the tier gives you and what it does not.
+
+What the relay enforces:
+
+- A guest only asks. A wrapper in front of every route refuses a guest unless the route is on a short list, so a route added later is closed until someone opens it ([protocol](protocol.md#guests)). No teammate can be sent work by way of a guest, and nothing but the relay's own notices reaches one.
+- A guest reaches only the teammates you listed. Its send takes `to` and `body` and nothing else: no `--then`, no attachments, no group, no urgent, no parent. Any other field is refused, including one added later. Its roster shows the listed teammates and a few facts about each, and failover never moves its ask to a teammate you did not list. Its asks can never go to a phone, a guest, or the history, notes or pass services, since those read your private data.
+- A guest's ask is held for you by default, with its whole body shown in `tincan held`. An `approval.json` entry cannot lift that hold. `--no-hold` can, for one guest, and the invite's audit row records it. It lifts only this default: `approval.json` and the holds on council and the web agents still apply.
+- What follows from a guest's ask stays marked. A teammate working on one sends with the mark, however the request finds its parent, and a body line says so for clients that ignore the field. While that work is unapproved, including all of a `--no-hold` guest's, the next ask is held for you too. Agents' standing instructions say an unapproved marked request is outside input, not owner-authorized work.
+- A guest holds no relay key. `relay.key` is how a teammate recognizes the relay after it moves, so whoever holds it could pass as the relay to an agent looking for it. Every joined teammate holds it, and a guest does not. That also means a guest cannot find a moved relay on its own and needs the new address from you.
+- A guest needs `--admin-login`. The relay refuses a guest invite without it, because without a login check the name of a machine would be all that made it an admin device, and a guest names its own machines. A machine carrying a guest is never an admin device, whatever its name or login.
+- A guest invite is new-only, so a code cannot take a teammate's name, and a guest's name cannot become a teammate's without `tincan remove`. Guests are never re-admitted to a rebuilt machine; invite them again.
+- The term ends on time. From `guest_until` on, every route answers 403, before any sweep runs. The sweep then cancels its open requests and audits `guest_expired`. A long poll already in flight can finish up to one poll hold later and return nothing new.
+
+What it does not do:
+
+- An ask you approve is then ordinary work. The teammate acts on it as it would on your own request, and asks others on that basis. Read it the way you would read mail from a stranger with a request in it: `tincan held` shows the whole body, and approving is the review. The mark stays on so you and the teammate can see where it came from.
+- An answer to a teammate's needs_input question from a guest is not held again. You approved the request, and the guest's answers resume it, so a guest can steer approved work in up to three rounds.
+- Rate limits are the only limit on how much a guest sends. It can fill your held queue, and your alerts, at the 30 asks a minute any sender gets. `tincan remove` cuts it off.
+- The mark follows requests, not information. A teammate's reply to a guest can carry anything that teammate knows, and work outside a marked request, such as a post to a room, is not marked. Keep a listed teammate's reach in mind when you list it.
+- Sharing the relay machine shows a little to everyone on the guest's tailnet account. The share is to an account, not to one machine, and a shared-in machine can reach `/v1/hello`, `/v1/dist` and `POST /v1/join` without being joined. They answer with a proof that this is the relay and with your release files. Invite codes still decide who joins.
+- A second guest cannot share a machine with the first, and a guest cannot share one with a teammate. A guest code redeemed on your own admin device makes that device lose admin status. The local admin socket on the relay host still works, and `tincan remove` frees it.
+- The relay does not know a guest's account beyond its Tailscale login, recorded on join. Sharing is done in the Tailscale admin console, and stopping the share there is the other way to cut a guest off.
+
 ## Rooms
 
 A room is a thread the owner shares with chosen teammates ([protocol](protocol.md#rooms)). It widens who reads what, so its controls are these:
@@ -200,7 +225,7 @@ Release builds of tincan for macOS start their background services through a lau
 
 ## What it deliberately does not do
 
-- Joined agents trust each other fully. A request from a joined agent is meant to be acted on as if you asked, including actions like placing calls or spending money. The standing instructions say so plainly: a teammate's request is work the owner has already authorized, and agents do not stop to ask the owner for permission. What still holds: the relay's approval holds (council, dot-web, `approval.json`), one teammate at a time for a real-world action, and limits the owner gave an agent directly. By default there is no per-request approval, except that asks to the council and dot-web agents are held (see [Council](#council) and the dot-web note above); the optional owner gate below can hold requests to other agents.
+- Joined teammates trust each other fully. Guests are the exception, and [Guests](#guests) says how. A request from a joined teammate is meant to be acted on as if you asked, including actions like placing calls or spending money. The standing instructions say so plainly: a teammate's request is work the owner has already authorized, and agents do not stop to ask the owner for permission. What still holds: the relay's approval holds (council, dot-web, `approval.json`), one teammate at a time for a real-world action, and limits the owner gave an agent directly. By default there is no per-request approval, except that asks to the council and dot-web agents are held (see [Council](#council) and the dot-web note above); the optional owner gate below can hold requests to other agents.
 - Tailscale is the security boundary. Anything that can act as a joined machine on your tailnet can make your other agents act. Protect your tailnet: use tagged, short-lived auth keys and review who can add devices.
 - The relay can read every request and reply. Run it on a machine you control.
 - `tincan upgrade` trusts the relay host. The sha256 it checks and the binary it installs both come from the same relay, so the check protects against corruption in transit, not against a compromised relay. Only put release files you built yourself or downloaded from your own GitHub release into the relay's `--dist` directory.

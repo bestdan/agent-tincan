@@ -112,8 +112,9 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 		// whoami also says whether this relay hands out its key, which
 		// decides what a key missing from the saved config means below.
 		var me struct {
-			Name     string `json:"name"`
-			RelayKey string `json:"relay_key"`
+			Name       string    `json:"name"`
+			RelayKey   string    `json:"relay_key"`
+			GuestUntil time.Time `json:"guest_until"`
 		}
 		err = r.Raw(cctx, "GET", "/v1/whoami", nil, &me)
 		cancel()
@@ -133,6 +134,8 @@ func runDoctor(ctx context.Context, exe string, extraConfigs []string) doctorRep
 				if len(saved.RelayURLs) > 0 {
 					add(addressCheck(ctx, r, saved.RelayURLs))
 				}
+			case !me.GuestUntil.IsZero():
+				add(check{"guest", "ok", "this machine is a guest until " + me.GuestUntil.Local().Format(time.RFC1123) + "; if the relay's address changes, ask the owner for the new one", ""})
 			case me.RelayKey == "":
 				add(check{"relay moves", "warn", "the relay did not hand out its key (relay older than 0.5.0-rc12), so this agent cannot find the relay by itself if its address changes", "Upgrade the relay, then run tincan doctor again."})
 			case os.Getenv("TINCAN_RELAY") != "":

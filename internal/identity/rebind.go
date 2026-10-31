@@ -80,9 +80,11 @@ func sameMachine(recorded, name string) bool {
 }
 
 // eligible reports whether a, bound to some other node, may be re-admitted
-// by n, before the claim and the old node's status are considered.
+// by n, before the claim and the old node's status are considered. A guest
+// never is: re-admission rests on the owner's login, and a guest's machine
+// is not the owner's to vouch for.
 func eligible(a Agent, n Node) bool {
-	return a.NodeID != n.ID && !strings.HasPrefix(a.NodeID, VirtualPrefix) &&
+	return !a.Guest.Set() && a.NodeID != n.ID && !strings.HasPrefix(a.NodeID, VirtualPrefix) &&
 		a.NodeUser != "" && a.NodeUser == n.User && sameMachine(a.NodeName, n.Name)
 }
 

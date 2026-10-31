@@ -42,6 +42,9 @@ func (s *Server) checkThen(ctx context.Context, first identity.Agent, to string)
 	if target.Kind == onboard.KindPhone {
 		return &StatusError{Code: http.StatusBadRequest, Err: fmt.Errorf("%s: %w", to, errPhoneTakesNoRequests)}
 	}
+	if target.Guest.Set() {
+		return &StatusError{Code: http.StatusBadRequest, Err: fmt.Errorf("%s: %w", to, errGuestTakesNoRequests)}
+	}
 	return nil
 }
 
@@ -69,8 +72,14 @@ func (s *Server) followOnBar(ctx context.Context, first envelope.Request, to str
 	if target.Kind == onboard.KindPhone {
 		return errPhoneTakesNoRequests.Error(), nil
 	}
+	if target.Guest.Set() {
+		return errGuestTakesNoRequests.Error(), nil
+	}
 	return "", nil
 }
+
+// guestLineGap is what Prepare puts between the guest line and a body.
+const guestLineGap = "\n\n"
 
 // webHeaderRoom is kept free in a follow-on to a web teammate for the
 // request line the web agent puts before the message it types.
@@ -78,14 +87,15 @@ const webHeaderRoom = 128
 
 // followOnLimit is how long a follow-on to agent may be. A web teammate
 // fails a message over webSendBudget without sending it, and a follow-on
-// never moves to one that would take it, so its reply is cut to fit.
+// never moves to one that would take it, so its reply is cut to fit. Room is
+// left for the guest line Prepare may put in front.
 func (s *Server) followOnLimit(ctx context.Context, agent string) (int, error) {
 	target, ok, err := s.lookupAgent(ctx, agent)
 	if err != nil {
 		return 0, err
 	}
 	if ok && (onboard.IsWebChatKind(target.Kind) || onboard.IsHeldWebKind(target.Kind)) {
-		return webSendBudget - webHeaderRoom, nil
+		return webSendBudget - webHeaderRoom - len(envelope.GuestLine) - len(guestLineGap), nil
 	}
 	return envelope.DefaultMaxBody, nil
 }

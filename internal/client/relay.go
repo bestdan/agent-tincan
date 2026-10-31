@@ -115,6 +115,9 @@ type AgentInfo struct {
 	NodeID   string `json:"node_id,omitempty"`
 	NodeName string `json:"node_name,omitempty"`
 	NodeUser string `json:"node_user,omitempty"`
+	// GuestUntil is when a guest's access ends. Only an admin's roster lists
+	// guests, and whoami tells a guest its own. Zero for a teammate.
+	GuestUntil time.Time `json:"guest_until,omitzero"`
 	// Target carries the relay's schedule facts for an agent on wake method
 	// schedule, or its last wake for a webhook or email agent the relay has
 	// woken, and is left out otherwise and by older relays. Its fields sit
@@ -689,6 +692,47 @@ func (r *Relay) InviteKind(ctx context.Context, name, kind string) (string, erro
 	}
 	err := r.call(ctx, r.api, "POST", "/v1/admin/invite", in, &out)
 	return out.Code, err
+}
+
+// GuestInvite is what a guest invite asks the relay for.
+type GuestInvite struct {
+	Ask        []string `json:"ask"`
+	ForSeconds int64    `json:"for_seconds"`
+	NoHold     bool     `json:"no_hold,omitempty"`
+}
+
+// GuestInvited is the relay's answer to a guest invite. HoldAlerts says a
+// held ask would reach the owner by a notify teammate or a push to a phone.
+type GuestInvited struct {
+	Code       string    `json:"code"`
+	GuestUntil time.Time `json:"guest_until,omitzero"`
+	GuestAsks  []string  `json:"guest_asks,omitempty"`
+	HoldAlerts bool      `json:"hold_alerts,omitempty"`
+}
+
+// ErrGuestsUnsupported identifies a relay that would not keep a guest's
+// limits. An older relay ignores them and mints a full teammate.
+var ErrGuestsUnsupported = errors.New("this relay does not support guests (upgrade the relay); no code was issued")
+
+// InviteGuest mints a join code for a guest (admin devices only). It asks
+// first whether the relay knows guests, then checks that the relay echoed the
+// limits, and returns no code if it did not.
+func (r *Relay) InviteGuest(ctx context.Context, name string, in GuestInvite) (GuestInvited, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return GuestInvited{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.Guests {
+		return GuestInvited{}, ErrGuestsUnsupported
+	}
+	var out GuestInvited
+	if err := r.call(ctx, r.api, "POST", "/v1/admin/invite", map[string]any{"name": name, "guest": in}, &out); err != nil {
+		return GuestInvited{}, err
+	}
+	if out.GuestUntil.IsZero() {
+		return GuestInvited{}, ErrGuestsUnsupported
+	}
+	return out, nil
 }
 
 // SetKind records a joined agent's kind; "" clears it (admin devices only).

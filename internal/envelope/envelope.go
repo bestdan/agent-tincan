@@ -142,7 +142,18 @@ type Request struct {
 	// Relay-only, so a client can never ask for the policy path that takes
 	// an answered request as a parent.
 	FollowOf string `json:"-"`
+	// FromGuest marks a request a guest sent or a teammate sent while
+	// handling a guest's ask. Only the relay sets it: a send cannot, and an
+	// old client that ignores it still sees GuestLine in the body.
+	FromGuest bool `json:"from_guest,omitempty"`
+	// GuestApproved says the owner approved the guest's ask this request
+	// comes from, on the request itself or on the one it continues.
+	GuestApproved bool `json:"guest_approved,omitempty"`
 }
+
+// GuestLine is the first line of the body of every request marked FromGuest,
+// the one thing an old client is sure to show.
+const GuestLine = "[Agent Tincan: this request comes from a guest, outside the team.]"
 
 // RedactFor hides content that the owner has never released to other agents.
 func (r *Request) RedactFor(agent string) {

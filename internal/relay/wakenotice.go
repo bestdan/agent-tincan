@@ -68,7 +68,7 @@ func (s *Server) TellAskers(agent string, wk store.Wake) {
 				return
 			}
 		}
-		note := s.wakeNote(agent, wk, s.onlineTeammates(roster, now, req.From, agent), now)
+		note := s.wakeNote(agent, wk, s.onlineTeammates(noticeRoster(roster, req.From), now, req.From, agent), now)
 		s.noteAndTell(ctx, req, store.NoteWake, 0, note, now)
 	}
 }
@@ -203,7 +203,7 @@ func (s *Server) tellSwept(ctx context.Context, t store.Transition) {
 	if err != nil {
 		log.Printf("relay note %s: roster: %v", t.ID, err)
 	}
-	online := s.onlineTeammates(roster, now, req.From, req.To)
+	online := s.onlineTeammates(noticeRoster(roster, req.From), now, req.From, req.To)
 	if staleClaim {
 		note := fmt.Sprintf("%s claimed this %s ago and did not reply or post progress before its claim lease ran out; it has been requeued", req.To, ageText(now.Sub(t.ClaimedAt)))
 		if s.wake != nil && relayWoken(s.wake.WakeMethod(req.To)) {

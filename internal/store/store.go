@@ -250,6 +250,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate followups: %w", err)
 	}
+	if err := s.migrateGuests(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate guests: %w", err)
+	}
 	for {
 		more, err := s.backfillSearchBatch()
 		if err != nil {
@@ -512,8 +516,12 @@ func (s *Store) PutAgent(ctx context.Context, a identity.Agent) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM agents WHERE name = ?`, a.Name); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agents(name, node_id, node_name, joined_at, kind, node_user, last_seen_at, last_poll_at, version, features, poll_features, good_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.Name, a.NodeID, a.NodeName, a.JoinedAt.UnixMilli(), nullable(a.Kind), nullable(a.NodeUser), lastSeen, lastPoll, version, features, pollFeatures, goodAt); err != nil {
+	until, asks, err := encodeGuest(a.Guest)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO agents(name, node_id, node_name, joined_at, kind, node_user, last_seen_at, last_poll_at, version, features, poll_features, good_at, guest_until, guest_asks, guest_no_hold, guest_ended) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.Name, a.NodeID, a.NodeName, a.JoinedAt.UnixMilli(), nullable(a.Kind), nullable(a.NodeUser), lastSeen, lastPoll, version, features, pollFeatures, goodAt, until, asks, a.Guest.NoHold, a.Guest.Ended); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -667,7 +675,7 @@ func (s *Store) AgentByName(ctx context.Context, name string) (identity.Agent, b
 }
 
 func (s *Store) agentsWhere(ctx context.Context, where string, args ...any) ([]identity.Agent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, node_id, node_name, joined_at, COALESCE(kind, ''), COALESCE(node_user, ''), COALESCE(good_at, '') FROM agents WHERE `+where+` ORDER BY name`, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT name, node_id, node_name, joined_at, COALESCE(kind, ''), COALESCE(node_user, ''), COALESCE(good_at, ''), guest_until, guest_asks, guest_no_hold, guest_ended FROM agents WHERE `+where+` ORDER BY name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -675,11 +683,15 @@ func (s *Store) agentsWhere(ctx context.Context, where string, args ...any) ([]i
 	var out []identity.Agent
 	for rows.Next() {
 		var a identity.Agent
-		var joined int64
-		if err := rows.Scan(&a.Name, &a.NodeID, &a.NodeName, &joined, &a.Kind, &a.NodeUser, &a.GoodAt); err != nil {
+		var joined, until int64
+		var asks string
+		if err := rows.Scan(&a.Name, &a.NodeID, &a.NodeName, &joined, &a.Kind, &a.NodeUser, &a.GoodAt, &until, &asks, &a.Guest.NoHold, &a.Guest.Ended); err != nil {
 			return nil, err
 		}
 		a.JoinedAt = time.UnixMilli(joined)
+		if a.Guest.Until, a.Guest.Asks, err = decodeGuest(until, asks); err != nil {
+			return nil, err
+		}
 		out = append(out, a)
 	}
 	return out, rows.Err()
@@ -705,8 +717,12 @@ func (s *Store) PutInvite(ctx context.Context, inv identity.Invite) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM invites WHERE name = ? AND code != ?`, inv.Name, inv.Code); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO invites(code, name, expires, kind, new_only, mint_node) VALUES (?, ?, ?, ?, ?, ?)`,
-		inv.Code, inv.Name, inv.Expires.UnixMilli(), nullable(inv.Kind), inv.NewOnly, nullable(inv.MintNode)); err != nil {
+	until, asks, err := encodeGuest(inv.Guest)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO invites(code, name, expires, kind, new_only, mint_node, guest_until, guest_asks, guest_no_hold) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		inv.Code, inv.Name, inv.Expires.UnixMilli(), nullable(inv.Kind), inv.NewOnly, nullable(inv.MintNode), until, asks, inv.Guest.NoHold); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -717,8 +733,9 @@ func (s *Store) PutInvite(ctx context.Context, inv identity.Invite) error {
 // code never reaches the database.
 func (s *Store) TakeInvite(ctx context.Context, code string) (identity.Invite, bool, error) {
 	var inv identity.Invite
-	var exp int64
-	err := s.db.QueryRowContext(ctx, `DELETE FROM invites WHERE code = ? RETURNING code, name, expires, COALESCE(kind, ''), new_only, COALESCE(mint_node, '')`, code).Scan(&inv.Code, &inv.Name, &exp, &inv.Kind, &inv.NewOnly, &inv.MintNode)
+	var exp, until int64
+	var asks string
+	err := s.db.QueryRowContext(ctx, `DELETE FROM invites WHERE code = ? RETURNING code, name, expires, COALESCE(kind, ''), new_only, COALESCE(mint_node, ''), guest_until, guest_asks, guest_no_hold`, code).Scan(&inv.Code, &inv.Name, &exp, &inv.Kind, &inv.NewOnly, &inv.MintNode, &until, &asks, &inv.Guest.NoHold)
 	if errors.Is(err, sql.ErrNoRows) {
 		return identity.Invite{}, false, nil
 	}
@@ -726,6 +743,9 @@ func (s *Store) TakeInvite(ctx context.Context, code string) (identity.Invite, b
 		return identity.Invite{}, false, err
 	}
 	inv.Expires = time.UnixMilli(exp)
+	if inv.Guest.Until, inv.Guest.Asks, err = decodeGuest(until, asks); err != nil {
+		return identity.Invite{}, false, err
+	}
 	return inv, true, nil
 }
 
@@ -793,10 +813,10 @@ func (s *Store) enqueueTx(ctx context.Context, tx *sql.Tx, req envelope.Request,
 		return envelope.Request{}, err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO requests
-		(id, from_agent, to_agent, parent_id, trace_id, hop, chain, kind, body, status, created_at, updated_at, expires_at, attachments, was_held, approved, group_id, urgent, from_session, room_post_id, follow_of)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(id, from_agent, to_agent, parent_id, trace_id, hop, chain, kind, body, status, created_at, updated_at, expires_at, attachments, was_held, approved, group_id, urgent, from_session, room_post_id, follow_of, from_guest, guest_approved)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.ID, req.From, req.To, req.ParentID, req.TraceID, req.Hop, string(chain), string(req.Kind), req.Body,
-		string(status), now.UnixMilli(), now.UnixMilli(), now.Add(ttl).UnixMilli(), atts, req.WasHeld, req.Approved, req.Group, req.Urgent, req.FromSession, sql.NullInt64{Int64: req.RoomPostID, Valid: req.RoomPostID != 0}, req.FollowOf)
+		string(status), now.UnixMilli(), now.UnixMilli(), now.Add(ttl).UnixMilli(), atts, req.WasHeld, req.Approved, req.Group, req.Urgent, req.FromSession, sql.NullInt64{Int64: req.RoomPostID, Valid: req.RoomPostID != 0}, req.FollowOf, req.FromGuest, req.GuestApproved)
 	if err != nil {
 		return envelope.Request{}, err
 	}
@@ -1390,7 +1410,7 @@ func (s *Store) Request(ctx context.Context, id string) (envelope.Request, envel
 	return s.lookup(ctx, id)
 }
 
-const requestCols = `id, from_agent, to_agent, parent_id, trace_id, hop, chain, kind, body, status, created_at, attachments, exchanges, resumed, was_held, approved, group_id, urgent, progress_note, progress_at, moved_from, room_post_id, follow_of`
+const requestCols = `id, from_agent, to_agent, parent_id, trace_id, hop, chain, kind, body, status, created_at, attachments, exchanges, resumed, was_held, approved, group_id, urgent, progress_note, progress_at, moved_from, room_post_id, follow_of, from_guest, guest_approved`
 
 type scanner interface{ Scan(dest ...any) error }
 
@@ -1400,7 +1420,7 @@ func scanRequest(sc scanner) (envelope.Request, envelope.Status, error) {
 	var created, progressAt int64
 	var note string
 	var roomPost sql.NullInt64
-	if err := sc.Scan(&r.ID, &r.From, &r.To, &r.ParentID, &r.TraceID, &r.Hop, &chain, &kind, &r.Body, &status, &created, &atts, &exchanges, &r.Resumed, &r.WasHeld, &r.Approved, &r.Group, &r.Urgent, &note, &progressAt, &movedFrom, &roomPost, &r.FollowOf); err != nil {
+	if err := sc.Scan(&r.ID, &r.From, &r.To, &r.ParentID, &r.TraceID, &r.Hop, &chain, &kind, &r.Body, &status, &created, &atts, &exchanges, &r.Resumed, &r.WasHeld, &r.Approved, &r.Group, &r.Urgent, &note, &progressAt, &movedFrom, &roomPost, &r.FollowOf, &r.FromGuest, &r.GuestApproved); err != nil {
 		return envelope.Request{}, "", err
 	}
 	r.RoomPostID = roomPost.Int64
@@ -1487,7 +1507,7 @@ func (s *Store) CountHeld(ctx context.Context) (int, error) {
 // Release queues a held request with a fresh delivery TTL and its original creation time.
 func (s *Store) Release(ctx context.Context, id string, ttl time.Duration) (envelope.Request, error) {
 	now := s.now()
-	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, approved = 1, updated_at = ?, expires_at = ? WHERE id = ? AND status = ? AND expires_at > ?`, string(envelope.StatusQueued), now.UnixMilli(), now.Add(ttl).UnixMilli(), id, string(envelope.StatusHeld), now.UnixMilli())
+	res, err := s.db.ExecContext(ctx, `UPDATE requests SET status = ?, approved = 1, guest_approved = from_guest, updated_at = ?, expires_at = ? WHERE id = ? AND status = ? AND expires_at > ?`, string(envelope.StatusQueued), now.UnixMilli(), now.Add(ttl).UnixMilli(), id, string(envelope.StatusHeld), now.UnixMilli())
 	if err != nil {
 		return envelope.Request{}, err
 	}

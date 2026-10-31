@@ -386,7 +386,24 @@ const localAdminKey ctxKey = 1
 
 // Handler is the agent API served on the tailnet.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+	return s.withHeld(limitBodies(s.guestGate(s.routes().ServeMux)))
+}
+
+// routeMux is a ServeMux that remembers what is registered on it, so a test
+// can walk every route as a guest.
+type routeMux struct {
+	*http.ServeMux
+	patterns []string
+}
+
+func (m *routeMux) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	m.patterns = append(m.patterns, pattern)
+	m.ServeMux.HandleFunc(pattern, h)
+}
+
+// routes builds the agent API's routes.
+func (s *Server) routes() *routeMux {
+	mux := &routeMux{ServeMux: http.NewServeMux()}
 	mux.HandleFunc("POST /v1/send", s.handleSend)
 	mux.HandleFunc("GET /v1/poll", s.handlePoll)
 	mux.HandleFunc("POST /v1/replies/ack", s.handleAckReplies)
@@ -414,12 +431,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/dist/{name}", s.handleDistFile)
 	mux.HandleFunc("POST "+uploadPath, s.handleUpload)
 	s.adminRoutes(mux)
-	return s.withHeld(limitBodies(mux))
+	return mux
 }
 
 // adminRoutes registers the routes served on both the tailnet API (for admin
 // devices) and the local admin socket. /v1/agents is added by the caller.
-func (s *Server) adminRoutes(mux *http.ServeMux) {
+func (s *Server) adminRoutes(mux interface {
+	HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request))
+}) {
 	mux.HandleFunc("GET /v1/admin/wake-config", s.handleWakeSettings)
 	mux.HandleFunc("PUT /v1/admin/wake-config/{agent}", s.handleWakeSettings)
 	mux.HandleFunc("GET /v1/admin/held", s.handleHeld)
@@ -559,6 +578,7 @@ func (s *Server) Sweep(ctx context.Context) {
 			}
 		}
 	}
+	s.sweepGuests(ctx)
 	s.failoverSweep(ctx)
 	s.sweepFollowOns(ctx)
 	if err := s.store.ExpireWatches(ctx); err != nil {
@@ -703,7 +723,14 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	out := map[string]any{"name": name, "kind": a.Kind, "relay_key": s.key, "relay_urls": s.urls}
+	out := map[string]any{"name": name, "kind": a.Kind}
+	// The key and addresses are how a client recognizes a moved relay, and a
+	// guest is not to hold them.
+	if a.Guest.Set() {
+		out["guest_until"] = a.Guest.Until.UTC()
+	} else {
+		out["relay_key"], out["relay_urls"] = s.key, s.urls
+	}
 	if s.cfg.Version != "" {
 		out["relay_version"] = s.cfg.Version
 	}
@@ -715,6 +742,9 @@ func (s *Server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
 
 // errPhoneTakesNoRequests refuses a send addressed to a phone agent.
 var errPhoneTakesNoRequests = errors.New("phone agents ask; they do not take requests")
+
+// errGuestTakesNoRequests refuses a send addressed to a guest.
+var errGuestTakesNoRequests = errors.New("guests ask; they do not take requests")
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	from := s.agent(w, r)
@@ -731,6 +761,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	guest, fromGuest := guestOf(r.Context())
+	if fromGuest {
+		if err := guestSendRefusal(guest, raw, req); err != nil {
+			writeErr(w, http.StatusForbidden, err)
+			return
+		}
+	}
 	if len(req.Attachments) > 0 && s.blobs == "" {
 		writeErr(w, http.StatusBadRequest, errAttachmentsOff)
 		return
@@ -738,6 +775,17 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	to, ok, err := s.dir.Agent(r.Context(), req.To)
 	if err != nil || !ok {
 		writeErr(w, http.StatusNotFound, errors.New("no such agent: "+req.To))
+		return
+	}
+	if to.Guest.Set() {
+		// Guests ask; only the relay's own notices reach one.
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("%s: %w", req.To, errGuestTakesNoRequests))
+		return
+	}
+	// Kinds can change after the invite, so a listed service is refused here
+	// too.
+	if fromGuest && roomServiceKinds[to.Kind] {
+		writeErr(w, http.StatusForbidden, errors.New("this guest may not ask "+req.To))
 		return
 	}
 	if to.Kind == onboard.KindPhone {
@@ -774,7 +822,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, statusFor(err), err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, envelope.SendResponse{Request: req, Target: s.recipientTarget(r.Context(), req.To)})
+	res := envelope.SendResponse{Request: req}
+	if !fromGuest {
+		// How a teammate wakes and what it last did are not a guest's to read.
+		res.Target = s.recipientTarget(r.Context(), req.To)
+	}
+	writeJSON(w, http.StatusCreated, res)
 }
 
 // submit takes a new request from req.From through every step a send
@@ -1267,6 +1320,17 @@ func (s *Server) handleClaim(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	if _, guest := guestOf(r.Context()); guest {
+		q, _, err := s.store.Request(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeErr(w, statusFor(err), err)
+			return
+		}
+		if q.To != name || q.From != client.RelaySender {
+			writeErr(w, http.StatusForbidden, errGuestRoute)
+			return
+		}
+	}
 	req, err := s.store.ClaimLeasesFrom(r.Context(), r.PathValue("id"), name, sess, s.cfg.ClaimLease, s.cfg.urgentLease())
 	if err != nil {
 		writeErr(w, statusFor(err), err)
@@ -1566,7 +1630,13 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 	if !admin && s.agent(w, r) == "" {
 		return
 	}
-	out, err := s.roster(r.Context(), admin)
+	var out []client.AgentInfo
+	var err error
+	if g, guest := guestOf(r.Context()); guest {
+		out, err = s.guestRoster(r.Context(), g)
+	} else {
+		out, err = s.roster(r.Context(), admin)
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -1632,12 +1702,16 @@ func (s *Server) rosterWith(ctx context.Context, admin, needQueue bool) ([]clien
 	out := make([]client.AgentInfo, 0, len(agents))
 	s.mu.Lock()
 	for _, a := range agents {
+		// Teammates never see a guest on the roster; an admin does.
+		if a.Guest.Set() && !admin {
+			continue
+		}
 		last := s.lastPoll[a.Name]
 		active := s.lastSeen[a.Name]
 		if p := persisted[a.Name]; p.After(active) {
 			active = p
 		}
-		info := client.AgentInfo{Name: a.Name, LastPoll: last, LastActive: active, Online: s.polledRecently(last, now), Wake: "none", Kind: a.Kind, GoodAt: a.GoodAt, Version: s.versions[a.Name]}
+		info := client.AgentInfo{Name: a.Name, LastPoll: last, LastActive: active, Online: s.polledRecently(last, now), Wake: "none", Kind: a.Kind, GoodAt: a.GoodAt, Version: s.versions[a.Name], GuestUntil: a.Guest.Until}
 		if info.GoodAt == "" {
 			info.GoodAt = onboard.StockGoodAt(a.Name, a.Kind)
 		}
@@ -1686,7 +1760,11 @@ func (s *Server) handleJoin(w http.ResponseWriter, r *http.Request) {
 	if wr, ok := s.wake.(WakeReporter); ok {
 		wr.Joined(name)
 	}
-	s.record(r.Context(), "joined", "", "", name, "")
+	joined := ""
+	if a, ok, err := s.dir.Agent(r.Context(), name); err == nil && ok && a.Guest.Set() {
+		joined = store.DetailJSON(map[string]any{"guest_until": a.Guest.Until.UTC()})
+	}
+	s.record(r.Context(), "joined", "", "", name, joined)
 	writeJSON(w, http.StatusOK, map[string]string{"name": name})
 }
 
@@ -1697,9 +1775,16 @@ func (s *Server) handleInvite(w http.ResponseWriter, r *http.Request) {
 		// NewOnly refuses a name bound to another machine instead of
 		// minting a code that would move that agent (the phone page).
 		NewOnly bool `json:"new_only"`
+		// Guest makes it a guest invite. An older relay ignores it, so a
+		// client sends it only after the guests capability.
+		Guest *client.GuestInvite `json:"guest"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Guest != nil {
+		s.inviteGuest(w, r, in.Name, in.Kind, *in.Guest)
 		return
 	}
 	if err := knownKind(in.Kind); err != nil {
@@ -2059,7 +2144,8 @@ func statusFor(err error) int {
 	case errors.Is(err, store.ErrForbidden), errors.Is(err, identity.ErrNotAdmin), errors.Is(err, identity.ErrNotJoined),
 		errors.Is(err, identity.ErrAgentAmbiguous), errors.Is(err, store.ErrNotRoomMember):
 		return http.StatusForbidden
-	case errors.Is(err, store.ErrWrongState), errors.Is(err, store.ErrRoomExists), errors.Is(err, identity.ErrNameTaken):
+	case errors.Is(err, store.ErrWrongState), errors.Is(err, store.ErrRoomExists), errors.Is(err, identity.ErrNameTaken),
+		errors.Is(err, identity.ErrGuestTier), errors.Is(err, identity.ErrGuestNode):
 		return http.StatusConflict
 	case errors.Is(err, identity.ErrBadInvite):
 		return http.StatusBadRequest
@@ -2225,7 +2311,7 @@ const heldTextBudget = client.MaxResponseBytes - 1<<20
 var errHeldTextCut = errors.New("this request's whole text is not shown yet: decide older held requests, then list again")
 
 // heldCut sets each held request's follow-on and returns the ids of those
-// whose long text, a follow-on's body or a first request's then, did not fit
+// whose long text, a follow-on's or guest's body or a first request's then, did not fit
 // heldTextBudget. reqs is oldest first and everything after the first that
 // does not fit is cut too, so deciding a request never cuts one the owner
 // has already read.
@@ -2241,7 +2327,7 @@ func (s *Server) heldCut(ctx context.Context, reqs []envelope.Request) map[strin
 		}
 		text := ""
 		switch {
-		case req.FollowOf != "":
+		case req.FollowOf != "" || req.FromGuest:
 			text = req.Body
 		case req.Then != nil:
 			text = req.Then.Body
@@ -2307,9 +2393,10 @@ func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 		full := req.Body
 		// A follow-on's reply starts past any preview, and approving
 		// releases it, so the owner reads the whole body, or is told it is
-		// cut and cannot approve it yet.
+		// cut and cannot approve it yet. The same goes for anything a guest
+		// wrote: nothing past a preview goes unread.
 		switch {
-		case req.FollowOf == "":
+		case req.FollowOf == "" && !req.FromGuest:
 			req.Body = approvalPreview(req.Body)
 		case cut[req.ID]:
 			req.Body = cutHeldText(req.Body)

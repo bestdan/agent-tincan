@@ -45,6 +45,16 @@ var (
 	// ErrNameTaken means a new-only invite named an agent that is bound to
 	// another machine.
 	ErrNameTaken = errors.New("the name belongs to an agent on another machine")
+	// ErrGuestTier refuses making a guest's name a full teammate, or the
+	// other way round, without tincan remove first.
+	ErrGuestTier = errors.New("the name is a guest; run tincan remove first to change its tier")
+	// ErrGuestNode refuses putting a guest and a teammate on one machine,
+	// where a header would choose between them.
+	ErrGuestNode = errors.New("a machine runs guests or teammates, not both")
+	// ErrGuestNeedsLogin refuses a guest invite on a relay that cannot tell
+	// a guest's login from the owner's: machine names belong to whoever runs
+	// the machine, so the --admin list alone would not keep a guest out.
+	ErrGuestNeedsLogin = errors.New("guest invites need the relay to run with --admin-login")
 )
 
 var nameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
@@ -103,7 +113,26 @@ type Agent struct {
 	// GoodAt is the owner-written line saying what the agent is good at,
 	// empty when unset. Only SetAgentGoodAt writes it; PutAgent keeps it.
 	GoodAt string `json:"good_at,omitempty"`
+	// Guest is set on a guest, a narrower tier than a teammate; see
+	// GuestTerms. Every rewrite of the row must carry it.
+	Guest GuestTerms `json:"guest,omitzero"`
 }
+
+// GuestTerms are the limits a guest joined under. A set value is the only
+// thing that makes an agent a guest.
+type GuestTerms struct {
+	Until  time.Time `json:"until,omitzero"`
+	Asks   []string  `json:"asks,omitempty"` // the teammates it may ask
+	NoHold bool      `json:"no_hold,omitempty"`
+	// Ended is set once the sweep has closed out a guest past Until.
+	Ended bool `json:"ended,omitempty"`
+}
+
+// Set reports whether these are a guest's terms.
+func (t GuestTerms) Set() bool { return !t.Until.IsZero() }
+
+// Over reports whether a guest on these terms has run out at now.
+func (t GuestTerms) Over(now time.Time) bool { return t.Ended || !now.Before(t.Until) }
 
 // Invite is a pending one-time code.
 //
@@ -121,6 +150,8 @@ type Invite struct {
 	// MintNode is the tailnet node id of the device that minted a NewOnly
 	// code, empty when it came from the local admin socket.
 	MintNode string
+	// Guest is set on a code minted by InviteGuest, and goes on the agent.
+	Guest GuestTerms
 }
 
 // Store persists agents and invites. The relay backs it with SQLite; tests
@@ -253,8 +284,10 @@ func (d *Directory) ResolveAgent(ctx context.Context, remoteAddr, claimed string
 				return d.resolved(ctx, n, a)
 			}
 		}
-		if res, ok, err := d.readmit(ctx, n, claimed); ok || err != nil {
-			return res, err
+		if !carriesGuest(agents) {
+			if res, ok, err := d.readmit(ctx, n, claimed); ok || err != nil {
+				return res, err
+			}
 		}
 		return Resolved{}, fmt.Errorf("%s is not %q: %w", n.Name, claimed, ErrNotJoined)
 	}
@@ -265,6 +298,9 @@ func (d *Directory) ResolveAgent(ctx context.Context, remoteAddr, claimed string
 		}
 		return Resolved{}, fmt.Errorf("%s: %w", n.Name, ErrNotJoined)
 	case 1:
+		if carriesGuest(agents) {
+			return d.resolved(ctx, n, agents[0])
+		}
 		// Another agent from the same rebuilt machine may still be waiting to
 		// be re-admitted, and this nameless call may be its first.
 		waiting, err := d.awaitingReadmit(ctx, n)
@@ -337,7 +373,22 @@ func (d *Directory) InviteKind(ctx context.Context, remoteAddr, name, kind strin
 	if err := d.requireAdmin(ctx, remoteAddr); err != nil {
 		return "", err
 	}
+	if err := d.refuseGuestName(ctx, name); err != nil {
+		return "", err
+	}
 	return d.mint(ctx, Invite{Name: name, Kind: kind})
+}
+
+// refuseGuestName is ErrGuestTier when name is a guest.
+func (d *Directory) refuseGuestName(ctx context.Context, name string) error {
+	a, ok, err := d.store.AgentByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	if ok && a.Guest.Set() {
+		return fmt.Errorf("%s: %w", name, ErrGuestTier)
+	}
+	return nil
 }
 
 // mint stores inv under a fresh code and returns the raw code. The caller
@@ -383,10 +434,34 @@ func (d *Directory) InviteNew(ctx context.Context, remoteAddr, name, kind string
 	if err != nil {
 		return "", err
 	}
+	if ok && a.Guest.Set() {
+		return "", fmt.Errorf("%s: %w", name, ErrGuestTier)
+	}
 	if err := newOnlyRefusal(a, ok, mintNode); err != nil {
 		return "", err
 	}
 	return d.mint(ctx, Invite{Name: name, Kind: kind, NewOnly: true, MintNode: mintNode})
+}
+
+// InviteGuest mints a code that joins the next machine to use it as a guest
+// on terms. It is InviteNew with no machine excused: any agent already under
+// name refuses it, here and again at Join, so a guest code cannot take a
+// teammate's name, even one on the inviting device.
+func (d *Directory) InviteGuest(ctx context.Context, remoteAddr, name string, terms GuestTerms) (string, error) {
+	if err := d.requireAdmin(ctx, remoteAddr); err != nil {
+		return "", err
+	}
+	if len(d.cfg.AdminLogins) == 0 {
+		return "", ErrGuestNeedsLogin
+	}
+	a, ok, err := d.store.AgentByName(ctx, name)
+	if err != nil {
+		return "", err
+	}
+	if err := newOnlyRefusal(a, ok, ""); err != nil {
+		return "", err
+	}
+	return d.mint(ctx, Invite{Name: name, NewOnly: true, Guest: terms})
 }
 
 // newOnlyRefusal is ErrNameTaken when agent a (found says it exists) is
@@ -430,11 +505,23 @@ func (d *Directory) Join(ctx context.Context, remoteAddr, code string) (string, 
 			return "", err
 		}
 	}
+	if prev.Guest.Set() && !inv.Guest.Set() {
+		return "", fmt.Errorf("%s: %w", inv.Name, ErrGuestTier)
+	}
+	others, err := d.store.AgentsByNode(ctx, n.ID)
+	if err != nil {
+		return "", err
+	}
+	for _, o := range others {
+		if o.Name != inv.Name && o.Guest.Set() != inv.Guest.Set() {
+			return "", fmt.Errorf("%s runs %s: %w", n.Name, o.Name, ErrGuestNode)
+		}
+	}
 	kind := prev.Kind
 	if inv.Kind != "" {
 		kind = inv.Kind
 	}
-	a := Agent{Name: inv.Name, NodeID: n.ID, NodeName: n.Name, NodeUser: n.User, JoinedAt: d.cfg.Now(), Kind: kind}
+	a := Agent{Name: inv.Name, NodeID: n.ID, NodeName: n.Name, NodeUser: n.User, JoinedAt: d.cfg.Now(), Kind: kind, Guest: inv.Guest}
 	if err := d.store.PutAgent(ctx, a); err != nil {
 		return "", err
 	}
@@ -529,7 +616,57 @@ func (d *Directory) requireAdmin(ctx context.Context, remoteAddr string) error {
 	if err != nil {
 		return err
 	}
-	return d.adminNode(n)
+	return d.adminCaller(ctx, n)
+}
+
+// adminCaller is adminNode with the check that needs the store: a node
+// carrying a guest is never an admin device, whatever its name or login. A
+// failed read says not admin.
+func (d *Directory) adminCaller(ctx context.Context, n Node) error {
+	if err := d.adminNode(n); err != nil {
+		return err
+	}
+	agents, err := d.store.AgentsByNode(ctx, n.ID)
+	if err != nil {
+		return fmt.Errorf("%s: %w: %w", n.Name, ErrNotAdmin, err)
+	}
+	if carriesGuest(agents) {
+		return fmt.Errorf("%s carries a guest: %w", n.Name, ErrNotAdmin)
+	}
+	return nil
+}
+
+// carriesGuest reports whether any of a node's agents is a guest.
+func carriesGuest(agents []Agent) bool {
+	return slices.ContainsFunc(agents, func(a Agent) bool { return a.Guest.Set() })
+}
+
+// GuestCaller finds the guest behind remoteAddr: a node carrying a guest is a
+// guest's node for every call, whatever the call claims. guest is true when
+// the node carries one, and then a failure means the claim named no guest of
+// this node, or named none on a node with several. It never re-admits a
+// machine, so it is safe to call ahead of the real resolve.
+func (d *Directory) GuestCaller(ctx context.Context, remoteAddr, claimed string) (a Agent, guest bool, err error) {
+	n, err := d.who.WhoIs(ctx, remoteAddr)
+	if err != nil {
+		return Agent{}, false, err
+	}
+	agents, err := d.store.AgentsByNode(ctx, n.ID)
+	if err != nil {
+		return Agent{}, false, err
+	}
+	if !carriesGuest(agents) {
+		return Agent{}, false, nil
+	}
+	if claimed == "" && len(agents) > 1 {
+		return Agent{}, true, fmt.Errorf("%s runs %s: %w", n.Name, strings.Join(agentNames(agents), ", "), ErrAgentAmbiguous)
+	}
+	for _, a := range agents {
+		if a.Guest.Set() && (claimed == "" || a.Name == claimed) {
+			return a, true, nil
+		}
+	}
+	return Agent{}, true, fmt.Errorf("%s is not %q: %w", n.Name, claimed, ErrNotJoined)
 }
 
 // NodeLookup is an optional Resolver extension that finds a tailnet node
@@ -559,7 +696,7 @@ func (d *Directory) IsAdminNode(ctx context.Context, id, name string) (bool, err
 	if err != nil || !found {
 		return false, err
 	}
-	return d.adminNode(n) == nil, nil
+	return d.adminCaller(ctx, n) == nil, nil
 }
 
 // adminNode reports why n is not an admin device, nil when it is.

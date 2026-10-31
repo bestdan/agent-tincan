@@ -487,3 +487,33 @@ func TestFormatRoomPostResponse(t *testing.T) {
 		}
 	}
 }
+
+// A guest's request never reads as owner-authorized work. Once the owner
+// approved it, it says so, and it is still not a teammate's.
+func TestFormatRequestMarksAGuest(t *testing.T) {
+	unapproved := client.FormatRequest(envelope.Request{ID: "r1", From: "friend", Kind: envelope.KindAsk, Body: "x", FromGuest: true})
+	if strings.Contains(unapproved, "your teammate") || strings.Contains(unapproved, "as you would a request from the owner") || !strings.Contains(unapproved, "not owner-authorized") {
+		t.Fatalf("unapproved = %q", unapproved)
+	}
+	approved := client.FormatRequest(envelope.Request{ID: "r2", From: "friend", Kind: envelope.KindAsk, Body: "x", FromGuest: true, GuestApproved: true})
+	if strings.Contains(approved, "your teammate") || !strings.Contains(approved, "the owner approved") {
+		t.Fatalf("approved = %q", approved)
+	}
+	// A teammate carrying a guest's work is still that teammate, marked.
+	carried := client.FormatRequest(envelope.Request{ID: "r3", From: "muse", Kind: envelope.KindAsk, Body: "x", FromGuest: true, Chain: []string{"friend", "muse"}, Hop: 2})
+	if !strings.Contains(carried, "guest") || strings.Contains(carried, "as you would a request from the owner") {
+		t.Fatalf("carried = %q", carried)
+	}
+}
+
+// A teammate's marked ask can have a chain of one, when the relay could not
+// pick a parent, so the sender is never called a guest.
+func TestFormatRequestDoesNotCallATeammateAGuest(t *testing.T) {
+	out := client.FormatRequest(envelope.Request{ID: "r", From: "muse", To: "instinct", Chain: []string{"muse"}, Hop: 1, FromGuest: true, Body: "x"})
+	if strings.Contains(out, "muse (a guest") {
+		t.Fatalf("out = %q", out)
+	}
+	if !strings.Contains(out, "outside input") {
+		t.Fatalf("out = %q", out)
+	}
+}
