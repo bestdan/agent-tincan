@@ -463,7 +463,7 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 | `answer` | `tincan answer <id> <message>` | Supply a clarification on a request you sent, resuming it for the same teammate. |
 | `cancel` | `tincan cancel <id>` | Withdraw a request nobody has picked up yet. |
 | `list_agents` | `tincan agents` | The roster: online or not, status (busy on whose request, idle, stuck and why, a web agent limited until its site resets, or offline), wake method, kind, when each agent last called the relay, which tincan build each runs, queued work with its oldest wait and live claims, what each opted-in Claude Code session says it is working on (`working_on`), and what each is good at (`good_at`). |
-| `trace` | `tincan trace [trace-id]` | Show a request chain step by step. Agents see chains they took part in; admins see every chain. |
+| `trace` | `tincan trace [trace-id]` | Show a request chain step by step. Agents see chains they took part in; admins see every chain. `--format md` or `--format json` and `--out <file>` save a whole chain. |
 | `search` | `tincan search <text> [--limit N] [--json]` | Find past requests and replies by text, with snippets and trace ids. Same chain visibility as trace. |
 | `onboard` | `tincan onboard --json` | The setup kit as JSON (see [Onboarding](#onboarding)). Read-only. |
 | `get_attachment` | `tincan attachment get <id>` | Fetch an attachment again by id. |
@@ -740,9 +740,12 @@ Every send, delivery, claim, reply, rejection, hold, approval, denial, wake, joi
 ```bash
 tincan trace              # recent chains (admin; --limit, default 20)
 tincan trace <trace-id>   # one chain, step by step, with its events
+tincan trace <trace-id> --format md --out errand.md # save the whole chain
 tincan search "restaurant" # find requests and replies; --limit defaults to 20, max 50
 tincan audit-verify       # check the log has not been altered
 ```
+
+`tincan trace <trace-id>` cuts bodies short for reading. `--format md` gives the whole chain as a document: each hop's sender, target, status and time, full request and reply bodies in code fences, clarification rounds, attachment names and audit events with their full detail. A progress note appears only on a hop still being worked: the relay does not keep one on a trace once the hop moves on, so a finished chain has no notes, and relay notes are not included. Attachment contents are not included. `--format json` gives the relay's trace response, for scripts. Both print to stdout unless you pass `--out <file>`, which writes a file only you can read (mode 0600) and refuses to replace an existing one unless you add `--force`. The relay needs no upgrade. An export shows what your `tincan trace` shows: agents can export chains they took part in, and admins any chain. Once written, the file is yours to protect ([trust model](docs/trust-model.md#what-agent-tincan-guarantees)).
 
 Search returns matching requests newest first. All search terms must match; punctuation is ignored and words such as `OR` are literal terms, not operators. Results contain separate request and reply excerpts when each body matches, plus attachment names, without searching file contents. CLI text output shows at most five attachment names, each capped at 80 characters, followed by “and N more”; JSON retains all names. An agent searches all of its own chains, newest first, in batches of 5,000 requests. Admins search everything, considering the newest 2,000 matches, so very old matches for common terms may be omitted for admins. Follow a result with `tincan trace <trace-id>` to read the chain. Search has the same visibility as trace: agents find only chains they took part in. The relay indexes the request and reply bodies it already stores, including older exchanges on upgrade in resumable batches of 500 rows per transaction. A backfill error is logged without preventing startup; search returns the indexed history so far, new exchanges remain indexed, and backfill resumes on reopen. Each search writes only its result count to the audit detail, never the query text. Older relays return an upgrade message when search is requested.
 
