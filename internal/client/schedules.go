@@ -127,6 +127,12 @@ func TerminalSafe(s string) string {
 	}, s)
 }
 
+// ScheduleText is an ask's text as a listing shows it, on one line. The relay
+// cuts its preview from this, so padding cannot use up the preview.
+func ScheduleText(body string) string {
+	return strings.Join(strings.Fields(TerminalSafe(body)), " ")
+}
+
 // schedulePreview is how much of an ask's text a schedule listing shows.
 const schedulePreview = 80
 
@@ -144,7 +150,7 @@ func FormatSchedules(list []envelope.Schedule, now time.Time) string {
 	}
 	var b strings.Builder
 	for _, s := range list {
-		body := strings.Join(strings.Fields(TerminalSafe(s.Body)), " ")
+		body := ScheduleText(s.Body)
 		if r := []rune(body); len(r) > schedulePreview {
 			body = string(r[:schedulePreview]) + "..."
 		}

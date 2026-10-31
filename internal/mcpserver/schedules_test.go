@@ -69,6 +69,30 @@ func TestScheduledAskRefusesWhatItCannotCarry(t *testing.T) {
 	}
 }
 
+// An at or every that is there but empty still asked for a schedule, so the
+// ask is refused rather than sent now.
+func TestScheduledAskEmptyTimesNeverSend(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	cs := session(t, m, "grokbot")
+	for name, times := range map[string]map[string]any{
+		"empty at":    {"at": ""},
+		"empty every": {"every": ""},
+		"both empty":  {"at": "", "every": ""},
+		"null at":     {"at": nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := map[string]any{"to": "muse", "message": "x", "wait_seconds": 1}
+			maps.Copy(args, times)
+			if out := call(t, cs, "ask", args); !strings.HasPrefix(out, "ERROR:") {
+				t.Fatalf("ask = %q", out)
+			}
+		})
+	}
+	if inbox, err := m.Client(t, "muse").Poll(t.Context(), 0); err != nil || len(inbox.Requests) != 0 {
+		t.Fatalf("sent = %+v, %v", inbox, err)
+	}
+}
+
 // An old relay answers capabilities without schedules. The ask tool must
 // refuse there, and never fall through to an ordinary send.
 func TestScheduledAskRefusedOnOldRelay(t *testing.T) {
@@ -97,8 +121,10 @@ func TestScheduledAskRefusedOnOldRelay(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cs.Close() })
-	out := call(t, cs, "ask", map[string]any{"to": "muse", "message": "x", "at": time.Now().Add(time.Hour).Format(time.RFC3339)})
-	if !strings.HasPrefix(out, "ERROR:") || !strings.Contains(out, "upgrade the relay") || sends != 0 {
-		t.Fatalf("ask = %q, sends %d", out, sends)
+	for _, at := range []string{time.Now().Add(time.Hour).Format(time.RFC3339), ""} {
+		out := call(t, cs, "ask", map[string]any{"to": "muse", "message": "x", "at": at, "wait_seconds": 1})
+		if !strings.HasPrefix(out, "ERROR:") || !strings.Contains(out, "upgrade the relay") || sends != 0 {
+			t.Fatalf("ask at %q = %q, sends %d", at, out, sends)
+		}
 	}
 }

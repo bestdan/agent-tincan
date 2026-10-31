@@ -131,7 +131,9 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSchedules lists the calling agent's schedules, or with all=1 every
-// agent's, for an admin device.
+// agent's, for an admin device. Each body is a preview: full bodies from 16
+// schedules are past what Relay.callOnce reads of a response, and an owner
+// who cannot list schedules cannot stop them.
 func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	owner := ""
 	if r.URL.Query().Get("all") == "1" {
@@ -149,6 +151,9 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	}
 	if list == nil {
 		list = []envelope.Schedule{}
+	}
+	for i := range list {
+		list[i].Body = approvalPreview(client.ScheduleText(list[i].Body))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"schedules": list})
 }

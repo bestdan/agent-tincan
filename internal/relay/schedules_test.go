@@ -18,6 +18,7 @@ import (
 	"github.com/mvanhorn/agent-tincan/internal/onboard"
 	"github.com/mvanhorn/agent-tincan/internal/policy"
 	"github.com/mvanhorn/agent-tincan/internal/relay"
+	"github.com/mvanhorn/agent-tincan/internal/store"
 	"github.com/mvanhorn/agent-tincan/internal/testrelay"
 )
 
@@ -521,6 +522,54 @@ func TestScheduleCreateRefusals(t *testing.T) {
 	}
 	if left := m.list(t, m.grok); len(left) != 0 {
 		t.Fatalf("created despite refusal: %+v", left)
+	}
+}
+
+// A listing carries previews, so an agent's full 32 schedules at the longest
+// body stay inside what a client reads of a response, for the owner and for
+// an admin device. What fires is the whole body.
+func TestScheduleListFitsClientLimit(t *testing.T) {
+	m := newScheduleMesh(t)
+	body := strings.Repeat("x", envelope.DefaultMaxBody)
+	var last envelope.Schedule
+	for range store.MaxSchedules {
+		var err error
+		last, err = client.ScheduleAsk(t.Context(), m.grok, client.ScheduledAsk{To: "muse", Body: body, Every: time.Hour})
+		if err != nil {
+			t.Fatalf("schedule: %v", err)
+		}
+	}
+	for name, list := range map[string]func() ([]envelope.Schedule, error){
+		"owner": func() ([]envelope.Schedule, error) { return client.Schedules(t.Context(), m.grok, false) },
+		"admin": func() ([]envelope.Schedule, error) { return client.Schedules(t.Context(), m.admin, true) },
+	} {
+		got, err := list()
+		if err != nil {
+			t.Fatalf("%s list: %v", name, err)
+		}
+		if len(got) != store.MaxSchedules {
+			t.Fatalf("%s list has %d schedules", name, len(got))
+		}
+		if b := got[0].Body; len(b) >= len(body) || !strings.HasPrefix(body, b) {
+			t.Fatalf("%s preview is %d bytes", name, len(b))
+		}
+	}
+	if sch, err := client.CancelSchedule(t.Context(), m.grok, last.ID); err != nil || sch.Body != body {
+		t.Fatalf("cancelled body is %d bytes, %v", len(sch.Body), err)
+	}
+}
+
+// The preview is cut after the text is cleaned, so padding cannot push an
+// ask's words out of what the owner sees.
+func TestSchedulePreviewSkipsPadding(t *testing.T) {
+	m := newScheduleMesh(t)
+	pad := strings.Repeat(" \n\x1b", 1000)
+	if _, err := client.ScheduleAsk(t.Context(), m.grok, client.ScheduledAsk{To: "muse", Body: pad + "wire the money", Every: time.Hour}); err != nil {
+		t.Fatalf("schedule: %v", err)
+	}
+	list, err := client.Schedules(t.Context(), m.grok, false)
+	if err != nil || len(list) != 1 || list[0].Body != "wire the money" {
+		t.Fatalf("list = %+v, %v", list, err)
 	}
 }
 

@@ -264,6 +264,20 @@ func scheduleAsk(ctx context.Context, b Backend, in askIn) (*mcp.CallToolResult,
 	return text(client.FormatSchedule(sch, now))
 }
 
+// namesTime reports whether the call names at or every, whatever the value.
+// The decoded askIn cannot tell an empty time from none, and an empty at
+// asked for a schedule and must never turn into a send now. A call that
+// cannot be read counts as naming one, so it is refused rather than sent.
+func namesTime(req *mcp.CallToolRequest) bool {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
+		return true
+	}
+	_, at := args["at"]
+	_, every := args["every"]
+	return at || every
+}
+
 // New builds the MCP server over a relay backend.
 func New(b Backend, version string, opts ...Option) *mcp.Server {
 	return NewWithOptions(b, version, &mcp.ServerOptions{Instructions: Instructions}, opts...)
@@ -290,8 +304,8 @@ func NewWithOptions(b Backend, version string, opts *mcp.ServerOptions, more ...
 	}
 
 	mcp.AddTool(s, &mcp.Tool{Name: "ask", Description: "Ask teammates to do something or answer something. Set also for additional targets (8 total); sending to several teammates at once is for questions, never for calls, payments or bookings. Waits up to wait_seconds and returns replies plus a request or group id to check with get_reply. Set at or every to have the relay send it later or on a repeat instead; that returns a schedule, not a reply."},
-		func(ctx context.Context, _ *mcp.CallToolRequest, in askIn) (*mcp.CallToolResult, any, error) {
-			if in.At != "" || in.Every != "" {
+		func(ctx context.Context, req *mcp.CallToolRequest, in askIn) (*mcp.CallToolResult, any, error) {
+			if namesTime(req) {
 				return scheduleAsk(ctx, b, in)
 			}
 			if len(in.Also) > 0 {
