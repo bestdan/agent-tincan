@@ -192,6 +192,19 @@ func (s *Server) guestGate(mux *http.ServeMux) http.Handler {
 	})
 }
 
+// guestTermOver refuses a guest whose term ended after the gate passed its
+// call, and reports whether it did. A body can take as long as the server's
+// read timeout, and the sweep does not come back for what arrives after it
+// has run, so a handler that writes calls this once it has the body.
+func (s *Server) guestTermOver(w http.ResponseWriter, r *http.Request) bool {
+	g, guest := guestOf(r.Context())
+	if !guest || !g.Guest.Over(s.cfg.Now()) {
+		return false
+	}
+	writeErr(w, http.StatusForbidden, errGuestEnded)
+	return true
+}
+
 // callerFreeRoutes answer the same to anyone, so a caller WhoIs cannot place
 // may still use them.
 var callerFreeRoutes = map[string]bool{"GET /v1/hello": true, "GET /v1/dist": true, "GET /v1/dist/{name}": true}

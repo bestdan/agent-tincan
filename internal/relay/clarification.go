@@ -22,6 +22,9 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusRequestEntityTooLarge, err)
 		return
 	}
+	if s.guestTermOver(w, r) {
+		return
+	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

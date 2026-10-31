@@ -756,6 +756,9 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusRequestEntityTooLarge, err)
 		return
 	}
+	if s.guestTermOver(w, r) {
+		return
+	}
 	req, err := envelope.ParseSend(raw, from, envelope.DefaultMaxBody)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)

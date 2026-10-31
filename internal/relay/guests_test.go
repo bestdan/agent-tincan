@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1412,4 +1414,77 @@ func TestCallRacingAGuestJoinGetsNoGuestAccess(t *testing.T) {
 			})
 		}
 	}
+}
+
+// lateBody runs before ahead of its first read, as a body that arrives after
+// the gate has passed its call.
+type lateBody struct {
+	io.Reader
+	before func()
+}
+
+func (b *lateBody) Read(p []byte) (int, error) {
+	if b.before != nil {
+		b.before()
+		b.before = nil
+	}
+	return b.Reader.Read(p)
+}
+
+// A guest's call the gate passed in term cannot write once the term has ended
+// under it: the body can take as long as the server's read timeout, and the
+// sweep will not come back for what arrives after it has run.
+func TestGuestTermEndingMidCallStopsTheWrite(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	expire := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(time.Duration(guestFor)*time.Second + time.Second)
+	}
+	call := func(m *testrelay.Mesh, path, body string, before func()) int {
+		r := httptest.NewRequest("POST", path, &lateBody{Reader: strings.NewReader(body), before: before})
+		r.RemoteAddr = m.Addr(guestName)
+		r.Header.Set(client.AgentHeader, guestName)
+		w := httptest.NewRecorder()
+		m.Server.Handler().ServeHTTP(w, r)
+		return w.Code
+	}
+	noHold := func(t *testing.T) (*testrelay.Mesh, *client.Relay) {
+		m := testrelay.NewWithAdminLogin(t, relay.Config{Now: clock})
+		return m, m.JoinGuest(t, guestName, client.GuestInvite{Ask: []string{"muse"}, ForSeconds: guestFor, NoHold: true})
+	}
+	send := `{"to":"muse","body":"hello"}`
+
+	t.Run("send in term", func(t *testing.T) {
+		m, _ := noHold(t)
+		if code := call(m, "/v1/send", send, nil); code != http.StatusCreated {
+			t.Fatalf("send = %d", code)
+		}
+	})
+	t.Run("send", func(t *testing.T) {
+		m, _ := noHold(t)
+		if code := call(m, "/v1/send", send, expire); code != http.StatusForbidden {
+			t.Errorf("late send = %d, want 403", code)
+		}
+		if n, _, err := m.Store.CountQueuedWithPings(t.Context(), "muse"); err != nil || n != 0 {
+			t.Fatalf("muse has %d queued, %v", n, err)
+		}
+	})
+	t.Run("answer", func(t *testing.T) {
+		m, g := noHold(t)
+		first := guestAsk(t, g, "start")
+		muse := m.Client(t, "muse")
+		claimOne(t, muse, first.ID)
+		if _, err := muse.Reply(t.Context(), first.ID, "which one?", envelope.StatusNeedsInput); err != nil {
+			t.Fatal(err)
+		}
+		if code := call(m, "/v1/requests/"+first.ID+"/answer", `{"body":"the blue one"}`, expire); code != http.StatusForbidden {
+			t.Errorf("late answer = %d, want 403", code)
+		}
+		if _, st, err := m.Store.Request(t.Context(), first.ID); err != nil || st != envelope.StatusNeedsInput {
+			t.Fatalf("request = %s, %v", st, err)
+		}
+	})
 }

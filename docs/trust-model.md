@@ -191,7 +191,7 @@ What the relay enforces:
 - A guest holds no relay key. `relay.key` is how a teammate recognizes the relay after it moves, so whoever holds it could pass as the relay to an agent looking for it. Every joined teammate holds it, and a guest does not. That also means a guest cannot find a moved relay on its own and needs the new address from you.
 - A guest needs `--admin-login`. The relay refuses a guest invite without it, because without a login check the name of a machine would be all that made it an admin device, and a guest names its own machines. A machine carrying a guest is never an admin device, whatever its name or login.
 - A guest invite is new-only, so a code cannot take a teammate's name, and a guest's name cannot become a teammate's without `tincan remove`. Guests are never re-admitted to a rebuilt machine; invite them again.
-- The term ends on time. From `guest_until` on, every route answers 403, before any sweep runs. The sweep then cancels its open requests and audits `guest_expired`. A long poll already in flight can finish up to one poll hold later and return nothing new.
+- The term ends on time. From `guest_until` on, every route answers 403, before any sweep runs, and a send or answer whose body was still arriving is refused once it is read. The sweep then cancels its open requests and audits `guest_expired`. A long poll already in flight can finish up to one poll hold later and can carry a reply that landed in that time.
 
 What it does not do:
 
