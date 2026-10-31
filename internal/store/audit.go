@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 CREATE INDEX IF NOT EXISTS audit_trace ON audit(trace_id);
 CREATE INDEX IF NOT EXISTS audit_actor_at ON audit(actor, at);
+-- AgentStats reads the approval of each held request it counts.
+CREATE INDEX IF NOT EXISTS audit_approved ON audit(request_id) WHERE event = 'approved';
 `
 
 // AuditEvent is one entry in the append-only audit log.

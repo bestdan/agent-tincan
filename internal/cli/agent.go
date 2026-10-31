@@ -399,6 +399,9 @@ func formatAgents(agents []client.AgentInfo, now time.Time) string {
 		if unanswered := a.UnansweredField(now); unanswered != "" {
 			fmt.Fprintf(&b, " %s", unanswered)
 		}
+		if record := a.StatsField(); record != "" {
+			fmt.Fprintf(&b, " %s", record)
+		}
 		if workingOn := a.WorkingOnField(); workingOn != "" {
 			fmt.Fprintf(&b, " %s", workingOn)
 		}

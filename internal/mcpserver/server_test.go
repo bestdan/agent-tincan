@@ -1284,3 +1284,34 @@ func TestRoomToolsOverMCP(t *testing.T) {
 // membershipTool matches a tool name that suggests changing who is in a
 // room.
 var membershipTool = regexp.MustCompile(`member|add|remove|create|join|invite|kick|leave|delete`)
+
+// A teammate's measured record shows on its line, before the quoted fields,
+// and the description says what it counts.
+func TestListAgentsShowsRecord(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	if _, err := m.Client(t, "admin").SetGoodAt(context.Background(), "muse", "phone calls"); err != nil {
+		t.Fatal(err)
+	}
+	req, err := m.Client(t, "grokbot").Send(context.Background(), "muse", "dummy question", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Store.SetClock(func() time.Time { return time.Now().Add(90 * time.Second) })
+	if _, err := m.Store.Reply(context.Background(), req.ID, "muse", envelope.Reply{Status: envelope.StatusAnswered, Body: "dummy reply"}); err != nil {
+		t.Fatal(err)
+	}
+	sess := session(t, m, "instinct")
+	line := rosterLine(t, call(t, sess, "list_agents", nil), "muse")
+	if want := `, answered=1/1 median=1m, good_at="phone calls"`; !strings.HasSuffix(line, want) {
+		t.Fatalf("list_agents muse = %q, want it to end %q", line, want)
+	}
+	res, err := sess.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range res.Tools {
+		if tool.Name == "list_agents" && !strings.Contains(tool.Description, "answered=") {
+			t.Fatalf("description = %q", tool.Description)
+		}
+	}
+}
