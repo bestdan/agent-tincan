@@ -815,6 +815,7 @@ func TestSocketWakeAnnouncesRequeuedRequestBesideHidden(t *testing.T) {
 // A return to the queue is announced even when the hidden list is capped
 // and so cannot show the old record is stale.
 func TestSocketWakeAnnouncesRequeuedRequestPastHiddenCap(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
 	if err := shared.write(map[string]time.Time{pendingKey("r1"): time.Now(), revKey(envelope.Pending{ID: "r1", Rev: 100}): time.Now()}); err != nil {
 		t.Fatal(err)
@@ -849,6 +850,7 @@ func TestSocketWakeAnnouncesRequeuedRequestPastHiddenCap(t *testing.T) {
 // its id: without it a later return could not be told from an old window's
 // delivery.
 func TestSocketWakeHiddenRecordKeepsRev(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	shared := socketShared{dir: t.TempDir(), agent: "muse"}
 	if err := shared.write(map[string]time.Time{revKey(envelope.Pending{ID: "r1", Rev: 100}): time.Now().Add(-socketRecordKeep * 3 / 4)}); err != nil {
 		t.Fatal(err)
@@ -865,6 +867,7 @@ func TestSocketWakeHiddenRecordKeepsRev(t *testing.T) {
 // Windows from before rev share the record during an upgrade. A delivery
 // either side made holds for the other, and neither drops the other's key.
 func TestSocketWakeMixedVersionsAnnounceOnce(t *testing.T) {
+	skipOnWindows(t, skipSocketWake)
 	queued := client.Waiting{
 		Total:   1,
 		Queued:  1,
