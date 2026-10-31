@@ -43,8 +43,9 @@ turn when a background command exits (Muse), use "tincan wait" instead.
 With --per-request the listener takes the requests itself: it starts one fresh
 process through "sh -c" for each ask, unattended, as this agent. The process
 gets the request body on stdin, and TINCAN_REQUEST_ID, TINCAN_FROM and its own
-TINCAN_SESSION in its environment, and replies with "tincan reply". One that
-exits without replying fails the request with its exit code. Pings are answered
+TINCAN_SESSION in its environment, with TINCAN_FROM_GUEST=1 on a request a
+guest's ask led to, and replies with "tincan reply". One that exits without
+replying fails the request with its exit code. Pings are answered
 as usual, and notifies and replies stay for the agent's inbox. --worktree runs
 each process in its own new git worktree of a repository, removed afterwards
 unless the process left changes or commits in it.`,

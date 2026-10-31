@@ -235,6 +235,29 @@ func TestPerRequestStartsAWorkerPerRequestUpToMaxWorkers(t *testing.T) {
 	w.release(third)
 }
 
+// A request the relay marked reaches the worker's environment, and one it did
+// not leaves the variable unset.
+func TestPerRequestTellsAWorkerOfTheGuestMark(t *testing.T) {
+	w := newWorkerRig(t, relay.Config{})
+	w.m = testrelay.NewWithAdminLogin(t, relay.Config{PollHold: time.Second})
+	w.grokbot = w.m.Client(t, "grokbot")
+	guest := w.m.JoinGuest(t, "friend", client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600, NoHold: true})
+	w.listen(w.options(`printf %s "${TINCAN_FROM_GUEST-unset}" > ` + w.dir + `/$TINCAN_REQUEST_ID.guest; ` + w.fixture()))
+	req, err := guest.Send(t.Context(), "muse", "hello", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.started(req.ID)
+	if got := w.read(req.ID + ".guest"); got != "1" {
+		t.Fatalf("guest's ask: TINCAN_FROM_GUEST = %q", got)
+	}
+	plain := w.ask("hello")
+	w.started(plain)
+	if got := w.read(plain + ".guest"); got != "unset" {
+		t.Fatalf("teammate's ask: TINCAN_FROM_GUEST = %q", got)
+	}
+}
+
 func TestPerRequestExitWithoutReplyPostsFailedWithExitCode(t *testing.T) {
 	w := newWorkerRig(t, relay.Config{})
 	w.listen(w.options("exit 3"))

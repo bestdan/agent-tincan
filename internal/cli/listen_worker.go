@@ -221,12 +221,17 @@ func runWorkerProcess(ctx, runCtx context.Context, o workerOptions, req envelope
 }
 
 // workerEnv is what a worker is told beyond the listener's own environment.
-// TINCAN_FROM_GUEST belongs here once requests carry the relay's guest mark.
+// TINCAN_FROM_GUEST carries the relay's guest mark: a process has only its
+// environment and stdin, and no standing instructions to read the body's
+// guest line for it.
 func workerEnv(req envelope.Request, session, config string) []string {
 	env := []string{
 		"TINCAN_REQUEST_ID=" + req.ID,
 		"TINCAN_SESSION=" + session,
 		"TINCAN_FROM=" + req.From,
+	}
+	if req.FromGuest {
+		env = append(env, "TINCAN_FROM_GUEST=1")
 	}
 	if config != "" {
 		// A relative TINCAN_CONFIG would not resolve from a worktree.
