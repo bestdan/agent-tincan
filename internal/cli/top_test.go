@@ -56,7 +56,7 @@ func TestAttention(t *testing.T) {
 // The record columns leave room for a release version in the 80 columns a
 // default terminal has, on the header and on a row.
 func TestRenderFrameVersionFitsEightyColumns(t *testing.T) {
-	f := topFrame{at: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC), roster: client.Roster{Agents: []client.AgentInfo{{Name: "alpha", Online: true, Wake: "none", Version: "0.19.2", Stats: client.AgentStats{Answered: 12, Failed: 1, MedianReplyMS: 180_000}}}}}
+	f := topFrame{at: time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC), roster: client.Roster{Agents: []client.AgentInfo{{Name: "alpha", Online: true, Wake: "none", Version: "0.19.2", Stats: client.AgentStats{Answered: 12, Failed: 1, MedianReplyMS: new(int64(180_000))}}}}}
 	got := renderFrame(f, 80)
 	for _, want := range []string{" VERSION\n", " 0.19.2\n"} {
 		if !strings.Contains(got, want) {
@@ -67,7 +67,7 @@ func TestRenderFrameVersionFitsEightyColumns(t *testing.T) {
 
 func TestRenderFrame(t *testing.T) {
 	at := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
-	f := topFrame{at: at, roster: client.Roster{RelayVersion: "1.2.0", Agents: []client.AgentInfo{{Name: "alpha", Online: true, Wake: "none", Version: "1.2.0", Stats: client.AgentStats{Answered: 12, Failed: 1, MedianReplyMS: 180_000}}, {Name: "zeta", Wake: "none", Queued: 2}}}, note: "held and recent chains need an admin device"}
+	f := topFrame{at: at, roster: client.Roster{RelayVersion: "1.2.0", Agents: []client.AgentInfo{{Name: "alpha", Online: true, Wake: "none", Version: "1.2.0", Stats: client.AgentStats{Answered: 12, Failed: 1, MedianReplyMS: new(int64(180_000))}}, {Name: "zeta", Wake: "none", Queued: 2}}}, note: "held and recent chains need an admin device"}
 	want := "tincan top | relay 1.2.0 | online 1/2 | queued 2 | held ? | 12:00:00\n" +
 		"AGENT            STATE   WAKE         QUEUED OLDEST CLAIMS   ANS MEDIAN VERSION\n" +
 		"zeta             offline none              2      -      0     -      - \n" +

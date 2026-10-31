@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS replies (
   created_at INTEGER NOT NULL,
   attachments TEXT NOT NULL DEFAULT ''
 );
+-- AgentStats reads the replies written in a window; finding them by time
+-- keeps it off the rest of the request history.
+CREATE INDEX IF NOT EXISTS replies_created ON replies(created_at);
 `
 
 // Store is the relay's SQLite store.

@@ -22,8 +22,8 @@ const (
 	// roster every 2 seconds.
 	statsCacheTTL = 60 * time.Second
 	// statsCacheSize is how many caller-chosen windows the relay reads per
-	// statsCacheTTL. Each read scans finished asks on the store's one
-	// connection, so the cache is also the budget; the default window sits
+	// statsCacheTTL. Each read walks the window's finished asks on the store's
+	// one connection, so the cache is also the budget; the default window sits
 	// outside it, and the roster always has its read.
 	statsCacheSize = 8
 )
@@ -87,7 +87,11 @@ func (s *Server) agentStats(ctx context.Context, window time.Duration) (statsEnt
 	}
 	e := statsEntry{at: now, since: since, byAgent: make(map[string]client.AgentStats, len(stats))}
 	for agent, st := range stats {
-		e.byAgent[agent] = client.AgentStats{Answered: st.Answered, Failed: st.Failed, Expired: st.Expired, MedianReplyMS: st.MedianReply.Milliseconds()}
+		rec := client.AgentStats{Answered: st.Answered, Failed: st.Failed, Expired: st.Expired}
+		if st.HasMedian {
+			rec.MedianReplyMS = new(st.MedianReply.Milliseconds())
+		}
+		e.byAgent[agent] = rec
 	}
 	s.statsCache[window] = e
 	return e, nil

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,7 +69,7 @@ func TestAgentStatsCountsFinishedAsks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (AgentStat{Answered: 3, Failed: 1, Expired: 1, MedianReply: 2 * time.Minute}); got["muse"] != want {
+	if want := (AgentStat{Answered: 3, Failed: 1, Expired: 1, MedianReply: 2 * time.Minute, HasMedian: true}); got["muse"] != want {
 		t.Fatalf("muse = %+v, want %+v", got["muse"], want)
 	}
 	if want := (AgentStat{Failed: 1}); got["instinct"] != want {
@@ -134,7 +135,7 @@ func TestAgentStatsLeavesOutExpiryWaitingOnAsker(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := got["muse"]
-		st.MedianReply = 0
+		st.MedianReply, st.HasMedian = 0, false
 		if st != want {
 			t.Fatalf("since %v: muse = %+v, want %+v", since, st, want)
 		}
@@ -172,7 +173,7 @@ func TestAgentStatsHeldMeasuresFromApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (AgentStat{Answered: 1, MedianReply: time.Minute}); got["muse"] != want {
+	if want := (AgentStat{Answered: 1, MedianReply: time.Minute, HasMedian: true}); got["muse"] != want {
 		t.Fatalf("muse = %+v, want %+v", got["muse"], want)
 	}
 }
@@ -244,7 +245,114 @@ func TestAgentStatsWindowUsesFinishTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (AgentStat{Answered: 1, MedianReply: 2 * time.Minute}); got["muse"] != want {
+	if want := (AgentStat{Answered: 1, MedianReply: 2 * time.Minute, HasMedian: true}); got["muse"] != want {
 		t.Fatalf("muse = %+v, want %+v", got["muse"], want)
+	}
+}
+
+// A relay that was down expires old asks when it restarts, and that restart
+// is not when they finished: the deadline dates them.
+func TestAgentStatsDatesExpiryByDeadline(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	ask(t, s, "grokbot", "muse", "dummy question")
+	c.advance(time.Hour)
+	deadline := c.t
+	c.advance(72 * time.Hour)
+	if _, err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for since, want := range map[time.Time]AgentStat{
+		deadline:                       {Expired: 1},
+		deadline.Add(time.Millisecond): {},
+		c.t.Add(-time.Minute):          {},
+	} {
+		got, err := s.AgentStats(ctx, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got["muse"] != want {
+			t.Fatalf("since %v: muse = %+v, want %+v", since, got["muse"], want)
+		}
+	}
+}
+
+// Progress renews a claim past its deadline, and the ask was still live then,
+// so its expiry is no earlier than the last progress.
+func TestAgentStatsExpiryCountsProgressPastDeadline(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	req := ask(t, s, "grokbot", "muse", "dummy question")
+	if _, err := s.Claim(ctx, req.ID, "muse", 3*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(2 * time.Hour)
+	if err := s.SetProgress(ctx, req.ID, "muse", "dummy progress", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	progress := c.t
+	c.advance(2 * time.Hour)
+	if _, err := s.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for since, want := range map[time.Time]AgentStat{
+		progress:                       {Expired: 1},
+		progress.Add(time.Millisecond): {},
+	} {
+		got, err := s.AgentStats(ctx, since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got["muse"] != want {
+			t.Fatalf("since %v: muse = %+v, want %+v", since, got["muse"], want)
+		}
+	}
+}
+
+// A reply inside the millisecond is a known median of 0, unlike a record with
+// no reply time at all.
+func TestAgentStatsKnownZeroMedian(t *testing.T) {
+	s, c := open(t, ":memory:")
+	ctx := context.Background()
+	start := c.t
+	finish(t, s, c, "muse", envelope.StatusAnswered, 0)
+	finish(t, s, c, "instinct", envelope.StatusFailed, time.Minute)
+	got, err := s.AgentStats(ctx, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (AgentStat{Answered: 1, HasMedian: true}); got["muse"] != want {
+		t.Fatalf("muse = %+v, want %+v", got["muse"], want)
+	}
+	if want := (AgentStat{Failed: 1}); got["instinct"] != want {
+		t.Fatalf("instinct = %+v, want %+v", got["instinct"], want)
+	}
+}
+
+// History is kept for good, so the read finds replies by time and never walks
+// every answered ask: the cache limits how often it runs, not how long it
+// holds the store's one connection.
+func TestAgentStatsFindsRepliesByTime(t *testing.T) {
+	s, _ := open(t, ":memory:")
+	rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+agentStatsQuery, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(plan, "\n")
+	if !strings.Contains(got, "replies_created") || strings.Contains(got, "SCAN") {
+		t.Fatalf("plan does not find replies by time:\n%s", got)
 	}
 }

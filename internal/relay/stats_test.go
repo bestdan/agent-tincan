@@ -47,6 +47,17 @@ func (h *harness) finishAsk(c *statsClock, status envelope.Status, d time.Durati
 	}
 }
 
+// checkMedian fails unless st's median is wantMS, and returns st without it so
+// the rest compares with !=.
+func checkMedian(t *testing.T, st client.AgentStats, wantMS int64) client.AgentStats {
+	t.Helper()
+	if st.MedianReplyMS == nil || *st.MedianReplyMS != wantMS {
+		t.Fatalf("median of %+v is not %d", st, wantMS)
+	}
+	st.MedianReplyMS = nil
+	return st
+}
+
 func museStats(t *testing.T, agents []client.AgentInfo) client.AgentStats {
 	t.Helper()
 	for _, a := range agents {
@@ -77,7 +88,7 @@ func TestStatsRoute(t *testing.T) {
 	for _, a := range got.Agents {
 		switch a.Agent {
 		case "muse":
-			if want := (client.AgentStats{Agent: "muse", Answered: 2, Failed: 1, MedianReplyMS: 120_000}); a != want {
+			if want := (client.AgentStats{Agent: "muse", Answered: 2, Failed: 1}); checkMedian(t, a, 120_000) != want {
 				t.Fatalf("muse = %+v, want %+v", a, want)
 			}
 		default:
@@ -143,11 +154,32 @@ func TestRosterCarriesStats(t *testing.T) {
 	h.finishAsk(c, envelope.StatusAnswered, 2*time.Minute)
 	var ro client.Roster
 	rec := h.do(grokAddr, "GET", "/v1/agents", "", http.StatusOK, &ro)
-	if want := (client.AgentStats{Answered: 1, MedianReplyMS: 120_000}); museStats(t, ro.Agents) != want {
+	if want := (client.AgentStats{Answered: 1}); checkMedian(t, museStats(t, ro.Agents), 120_000) != want {
 		t.Fatalf("muse = %+v, want %+v", museStats(t, ro.Agents), want)
 	}
 	if got := strings.Count(rec.Body.String(), `"stats"`); got != 1 {
 		t.Fatalf("%d stats fields, want one: %s", got, rec.Body.String())
+	}
+}
+
+// A reply inside the millisecond is a known median of 0: it stays on the wire
+// and reads as <1s. A record with no known time leaves the field out.
+func TestRosterKeepsKnownZeroMedian(t *testing.T) {
+	h, c := newStatsHarness(t)
+	h.finishAsk(c, envelope.StatusFailed, time.Minute)
+	if rec := h.do(grokAddr, "GET", "/v1/agents", "", http.StatusOK, nil); strings.Contains(rec.Body.String(), "median_reply_ms") {
+		t.Fatalf("unknown median on the wire: %s", rec.Body.String())
+	}
+
+	h, c = newStatsHarness(t)
+	h.finishAsk(c, envelope.StatusAnswered, 0)
+	var ro client.Roster
+	rec := h.do(grokAddr, "GET", "/v1/agents", "", http.StatusOK, &ro)
+	if !strings.Contains(rec.Body.String(), `"median_reply_ms":0`) {
+		t.Fatalf("known zero median left out: %s", rec.Body.String())
+	}
+	if got := museStats(t, ro.Agents).MedianReply(); got != "<1s" {
+		t.Fatalf("median = %q, want <1s", got)
 	}
 }
 

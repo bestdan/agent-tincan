@@ -127,14 +127,14 @@ type AgentInfo struct {
 
 // AgentStats is an agent's record of asks finished in a window: counts and
 // a duration, never text. Agent is set in a StatsReport and empty on a
-// roster entry. MedianReplyMS is over answered asks, zero when none has a
-// known reply time.
+// roster entry. MedianReplyMS is over answered asks, nil when none has a
+// known reply time; a known median can be 0.
 type AgentStats struct {
 	Agent         string `json:"agent,omitempty"`
 	Answered      int    `json:"answered"`
 	Failed        int    `json:"failed"`
 	Expired       int    `json:"expired"`
-	MedianReplyMS int64  `json:"median_reply_ms,omitempty"`
+	MedianReplyMS *int64 `json:"median_reply_ms,omitempty"`
 }
 
 // StatsReport is GET /v1/stats: every joined agent's record for asks
@@ -150,10 +150,11 @@ func (s AgentStats) Finished() int { return s.Answered + s.Failed + s.Expired }
 // MedianReply is the median reply time for a person to read: "<1s", "45s",
 // "3m", "2h". Empty when it is unknown.
 func (s AgentStats) MedianReply() string {
-	d := time.Duration(s.MedianReplyMS) * time.Millisecond
-	switch {
-	case d <= 0:
+	if s.MedianReplyMS == nil {
 		return ""
+	}
+	d := time.Duration(*s.MedianReplyMS) * time.Millisecond
+	switch {
 	case d < time.Second:
 		return "<1s"
 	case d < time.Minute:
