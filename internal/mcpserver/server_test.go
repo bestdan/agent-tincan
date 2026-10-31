@@ -1411,3 +1411,63 @@ func TestLeaseTools(t *testing.T) {
 		t.Error("Instructions should mention leases")
 	}
 }
+
+func TestAskThenOverMCP(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	cs := session(t, m, "grokbot")
+	out := call(t, cs, "ask", map[string]any{"to": "muse", "message": "find it", "wait_seconds": 1, "then": map[string]any{"to": "instinct", "message": "file it"}})
+	if strings.HasPrefix(out, "ERROR") || !strings.Contains(out, "follow-on to instinct") {
+		t.Fatalf("ask: %q", out)
+	}
+	muse := m.Client(t, "muse")
+	inbox, err := muse.Poll(t.Context(), time.Millisecond)
+	if err != nil || len(inbox.Requests) != 1 {
+		t.Fatalf("first: %+v %v", inbox, err)
+	}
+	id := inbox.Requests[0].ID
+	if _, err := muse.Claim(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := muse.Reply(t.Context(), id, "found", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err = m.Client(t, "instinct").Poll(t.Context(), time.Millisecond)
+	if err != nil || len(inbox.Requests) != 1 || !strings.HasPrefix(inbox.Requests[0].Body, "file it\n") {
+		t.Fatalf("follow-on: %+v %v", inbox, err)
+	}
+}
+
+func TestAskThenRefusedShapesOverMCP(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	cs := session(t, m, "grokbot")
+	then := map[string]any{"to": "instinct", "message": "file it"}
+	for name, args := range map[string]map[string]any{
+		"also":   {"to": "muse", "message": "m", "also": []string{"grokbot2"}, "then": then},
+		"notify": {"to": "muse", "message": "m", "notify": true, "then": then},
+		"attach": {"to": "muse", "message": "m", "attach": []string{"x.txt"}, "then": then},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if out := call(t, cs, "ask", args); !strings.HasPrefix(out, "ERROR") {
+				t.Fatalf("ask: %q", out)
+			}
+		})
+	}
+}
+
+// Standing instructions say a guest's request is not a teammate's.
+func TestInstructionsCoverGuests(t *testing.T) {
+	if !strings.Contains(mcpserver.Instructions, "outside input, not owner-authorized work") {
+		t.Fatal("Instructions should say an unapproved guest request is outside input")
+	}
+}
+
+// A teammate on an admin device gets the admin roster, and list_agents still
+// shows it no guest.
+func TestListAgentsLeavesOutGuests(t *testing.T) {
+	m := testrelay.NewWithAdminLogin(t, relay.Config{})
+	m.JoinGuest(t, "friend", client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600})
+	m.JoinOnMachineOf(t, "admin", "laptop")
+	if out := call(t, session(t, m, "laptop"), "list_agents", nil); strings.Contains(out, "friend") || !strings.Contains(out, "muse") {
+		t.Fatalf("list_agents = %q", out)
+	}
+}

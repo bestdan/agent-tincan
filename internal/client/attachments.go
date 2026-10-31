@@ -60,7 +60,14 @@ type Capabilities struct {
 	// Schedules is set by a relay that takes scheduled asks (/v1/schedules).
 	// An older relay has no such route, so a client must never fall back to
 	// a send, which would go at once.
-	Schedules          bool  `json:"schedules,omitempty"`
+	Schedules bool `json:"schedules,omitempty"`
+	// Then is set by a relay that takes a follow-on on a send. An older
+	// relay ignores the field, so a client sends it only when this is set.
+	Then bool `json:"then,omitempty"`
+	// Guests is set by a relay that honors a guest invite. An older relay
+	// ignores the field and mints a full teammate, so a client never sends
+	// one without this.
+	Guests             bool  `json:"guests,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`

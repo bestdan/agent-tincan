@@ -94,7 +94,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.checkSendTarget(r.Context(), req.To); err != nil {
+	if _, err := s.checkSendTarget(r.Context(), req.To); err != nil {
 		writeErr(w, statusFor(err), err)
 		return
 	}
@@ -229,7 +229,7 @@ func (s *Server) fireSchedule(ctx context.Context, sch envelope.Schedule) {
 			return
 		}
 	}
-	err = s.checkSendTarget(ctx, sch.To)
+	_, err = s.checkSendTarget(ctx, sch.To)
 	var req envelope.Request
 	if err == nil {
 		req, err = s.submit(ctx, envelope.Request{From: sch.From, To: sch.To, Kind: envelope.KindAsk, Body: sch.Body, Urgent: sch.Urgent, NoParent: true})

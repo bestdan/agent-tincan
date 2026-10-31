@@ -130,6 +130,9 @@ type AgentInfo struct {
 	// it only on the entry of the agent the caller resolves to. False from
 	// relays that predate it.
 	Self bool `json:"self,omitempty"`
+	// GuestUntil is when a guest's access ends. Only an admin's roster lists
+	// guests, and whoami tells a guest its own. Zero for a teammate.
+	GuestUntil time.Time `json:"guest_until,omitzero"`
 	// Target carries the relay's schedule facts for an agent on wake method
 	// schedule, or its last wake for a webhook or email agent the relay has
 	// woken, and is left out otherwise and by older relays. Its fields sit
@@ -569,6 +572,39 @@ func (r *Relay) Ask(ctx context.Context, to, body, parent string, wait time.Dura
 	return r.asked(ctx, s, wait)
 }
 
+// ErrThenUnsupported means the relay does not advertise follow-ons. Such a
+// relay would silently drop the then field, so the client refuses to send.
+var ErrThenUnsupported = errors.New("this relay does not support follow-on asks (upgrade the relay)")
+
+// AskThen is Ask with a follow-on: once to answers, the relay sends then as
+// a new ask from this agent, with the reply attached as data.
+func (r *Relay) AskThen(ctx context.Context, to, body, parent string, then envelope.Then, wait time.Duration, urgent bool) (Result, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.Then {
+		return Result{}, ErrThenUnsupported
+	}
+	s, err := r.send(ctx, map[string]any{"to": to, "body": body, "kind": envelope.KindAsk, "parent_id": parent, "urgent": urgent, "then": then})
+	if err != nil {
+		return Result{}, err
+	}
+	return r.asked(ctx, s, wait)
+}
+
+// ThenNote is what an asker is told about a follow-on it just queued, given
+// the status its ask has come back with.
+func ThenNote(to string, status envelope.Status) string {
+	switch status {
+	case envelope.StatusAnswered:
+		return "This is answered, so the relay is sending your follow-on to " + to + ". If that is refused, you get a notice."
+	case envelope.StatusFailed, envelope.StatusDeclined, envelope.StatusCancelled, envelope.StatusExpired:
+		return "This ended without an answer, so your follow-on to " + to + " was dropped."
+	}
+	return "Once this is answered, the relay sends your follow-on to " + to + ". If that is refused, you get a notice. If this ends without an answer, the follow-on is dropped."
+}
+
 // What a poll does with unseen replies to this agent's own requests. No
 // poll marks a reply seen; a client that shows replies to its agent
 // acknowledges them afterwards with AckReplies. A poll that names none of
@@ -766,6 +802,47 @@ func (r *Relay) InviteKind(ctx context.Context, name, kind string) (string, erro
 	}
 	err := r.call(ctx, r.api, "POST", "/v1/admin/invite", in, &out)
 	return out.Code, err
+}
+
+// GuestInvite is what a guest invite asks the relay for.
+type GuestInvite struct {
+	Ask        []string `json:"ask"`
+	ForSeconds int64    `json:"for_seconds"`
+	NoHold     bool     `json:"no_hold,omitempty"`
+}
+
+// GuestInvited is the relay's answer to a guest invite. HoldAlerts says a
+// held ask would reach the owner by a notify teammate or a push to a phone.
+type GuestInvited struct {
+	Code       string    `json:"code"`
+	GuestUntil time.Time `json:"guest_until,omitzero"`
+	GuestAsks  []string  `json:"guest_asks,omitempty"`
+	HoldAlerts bool      `json:"hold_alerts,omitempty"`
+}
+
+// ErrGuestsUnsupported identifies a relay that would not keep a guest's
+// limits. An older relay ignores them and mints a full teammate.
+var ErrGuestsUnsupported = errors.New("this relay does not support guests (upgrade the relay); no code was issued")
+
+// InviteGuest mints a join code for a guest (admin devices only). It asks
+// first whether the relay knows guests, then checks that the relay echoed the
+// limits, and returns no code if it did not.
+func (r *Relay) InviteGuest(ctx context.Context, name string, in GuestInvite) (GuestInvited, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return GuestInvited{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.Guests {
+		return GuestInvited{}, ErrGuestsUnsupported
+	}
+	var out GuestInvited
+	if err := r.call(ctx, r.api, "POST", "/v1/admin/invite", map[string]any{"name": name, "guest": in}, &out); err != nil {
+		return GuestInvited{}, err
+	}
+	if out.GuestUntil.IsZero() {
+		return GuestInvited{}, ErrGuestsUnsupported
+	}
+	return out, nil
 }
 
 // SetKind records a joined agent's kind; "" clears it (admin devices only).
@@ -989,6 +1066,10 @@ func (r *Relay) call(ctx context.Context, c *http.Client, method, path string, i
 	return err
 }
 
+// MaxResponseBytes is the most of a response a client reads. A longer one is
+// cut off and fails to decode.
+const MaxResponseBytes = 4 << 20
+
 func (r *Relay) callOnce(ctx context.Context, c *http.Client, method, path string, in, out any) error {
 	var body io.Reader
 	if in != nil {
@@ -1012,7 +1093,7 @@ func (r *Relay) callOnce(ctx context.Context, c *http.Client, method, path strin
 	}
 	defer resp.Body.Close()
 	r.noteHeld(resp)
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
 	if err != nil {
 		return err
 	}

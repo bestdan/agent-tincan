@@ -239,11 +239,17 @@ func (s *Store) RecentTraces(ctx context.Context, limit int, excludePings bool, 
 }
 
 // Participants lists every agent that sent or received a request in a chain.
+// The target of a follow-on the owner has not approved received nothing yet:
+// counting it would show it the reply the hold keeps from it.
 func Participants(steps []TraceStep) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, st := range steps {
-		for _, a := range append([]string{st.Request.From, st.Request.To}, st.Request.Chain...) {
+		to := st.Request.To
+		if st.Request.FollowOf != "" && st.Request.WasHeld && !st.Request.Approved {
+			to = ""
+		}
+		for _, a := range append([]string{st.Request.From, to}, st.Request.Chain...) {
 			if a != "" && !seen[a] {
 				seen[a] = true
 				out = append(out, a)

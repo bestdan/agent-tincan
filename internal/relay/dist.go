@@ -188,6 +188,9 @@ func (d *dist) installable(platform string) bool {
 // It needs the caller's build and platform headers, and the platform's
 // binary in the dist; clients that send no platform get no notice.
 func (s *Server) upgradeFor(r *http.Request) string {
+	if _, guest := guestOf(r.Context()); guest {
+		return "" // a guest's machine is not the owner's to upgrade from here
+	}
 	if s.dist != nil {
 		available := s.dist.release()
 		if client.Newer(available, r.Header.Get(client.VersionHeader)) && s.dist.installable(r.Header.Get(client.PlatformHeader)) {

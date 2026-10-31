@@ -50,6 +50,10 @@ func (d *Directory) BindVirtual(ctx context.Context, name string, replace bool) 
 	if err != nil {
 		return err
 	}
+	// A bind carries no guest terms, so even --replace cannot go over a guest.
+	if ok && prev.Guest.Set() {
+		return fmt.Errorf("%s: %w", name, ErrGuestTier)
+	}
 	if ok && !replace && !strings.HasPrefix(prev.NodeID, VirtualPrefix) {
 		return fmt.Errorf("%q is a tailnet agent on %s: %w", name, prev.NodeName, ErrRealNodeBound)
 	}

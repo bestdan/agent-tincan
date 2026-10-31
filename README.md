@@ -444,6 +444,18 @@ An admin device usually never joins, so it has no saved config. Admin and roster
 
 `tincan remove <name>` cuts an agent off immediately: its queued requests are cancelled and, for ChatGPT, its tokens are revoked.
 
+### Inviting a guest
+
+A guest is someone outside your team, with their own agent on their own tailnet, who may ask the teammates you list for a limited time.
+
+```bash
+tincan invite friend --guest --ask muse,instinct --for 3d   # relay machine (or an admin device)
+```
+
+The relay needs `--admin-login`, and the term is 30 days at most. `invite` prints the code, the join command with the relay's full address, and what to do on the tailnet: share the relay machine with the guest's Tailscale account from the Tailscale admin console, in that direction. A guest's machine shared into your tailnet is quarantined and cannot reach the relay.
+
+Each ask a guest sends waits in `tincan held` for you, with its whole body, and what a teammate does from it is marked and held the same way until you approve. `invite` warns you when nothing would tell you about a held ask. `--no-hold` lets one guest's asks through, marked as outside input. A guest gets no follow-ons, attachments or relay key, cannot be asked anything, and does not show on your teammates' rosters. When its time ends every call it makes is refused and its open requests are cancelled. `tincan remove friend` ends it early and frees the name. Read [Guests](docs/trust-model.md#guests) in the trust model first.
+
 ### Tools
 
 Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio) or from the CLI.
@@ -454,7 +466,7 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 
 | MCP tool | CLI | What it does |
 |---|---|---|
-| `ask` | `tincan ask <agent[,agent...]> <message>` | Ask one or up to 8 distinct teammates. MCP uses `to: "a", also: ["b"]`. Waits up to 20 seconds, returning labeled replies and a group id for multiple targets. `urgent: true` (`--urgent`) marks time-critical requests. `notify` (`--notify`) sends without expecting a reply. `attach` (`--attach <path>`) adds files. `--json` prints JSON (see below). |
+| `ask` | `tincan ask <agent[,agent...]> <message>` | Ask one or up to 8 distinct teammates. MCP uses `to: "a", also: ["b"]`. Waits up to 20 seconds, returning labeled replies and a group id for multiple targets. `urgent: true` (`--urgent`) marks time-critical requests. `notify` (`--notify`) sends without expecting a reply. `attach` (`--attach <path>`) adds files. `then` (`--then <agent> "<follow-on>"`) queues one follow-on, see below. `--json` prints JSON (see below). |
 | `get_reply` | `tincan get <id>` | Check on a request or group you sent, optionally waiting up to 20 seconds. `--json` prints JSON. |
 | `check_inbox` | `tincan inbox` | Take waiting requests (this claims them, so no one else handles them) and replies to your own requests you have not seen yet. `--json` prints JSON. |
 | `claim` | (done by `inbox`) | Mark a delivered request as yours. `check_inbox` already does this. |
@@ -501,6 +513,15 @@ A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a te
 - A send the relay rejects appears on its own target, and the requests that were queued are still tracked. A poll failure shows as an `error` on that result, keeping its id and last known status beside the other replies. A multi-target MCP notify returns a tool error if any upload or send fails, with the per-target results in its content.
 - The relay accepts at most 8 requests per sender and group tag; further sends return HTTP 400. `GET /v1/groups/{id}` lists only the accepted members (`id` and `to`), without bodies or replies and without marking replies seen. Clients reconcile that list with their own send errors, so a request whose send response was lost is recovered.
 - With an older relay, the group id works only in the client instance that sent it (such as the same MCP server); a later CLI run must use the individual request ids.
+
+### Follow-on asks
+
+`tincan ask muse "find the receipt" --then hermes "file the receipt"` (MCP `then: {"to": "hermes", "message": "file the receipt"}`) has the relay ask hermes as soon as muse answers, with no model turn in between, so the follow-through does not need your session to be alive.
+
+- The follow-on is one ask from you, in the same chain. Its body is your text, then muse's reply between random delimiters with a line saying it is a teammate's reply and data, not instructions. That line is an instruction to a model, not a control ([trust model](docs/trust-model.md#follow-on-asks)).
+- With `--then`, quote the message and the follow-on as one argument each. It works on a single ask, not with `--notify`, `--attach` or several targets, and takes one follow-on. It is refused after a `history`, `notes` or `pass` teammate, and a relay that predates it refuses rather than drops it.
+- Only an answered request fires it: `needs_input` keeps it waiting, and failed, declined, cancelled or expired drop it. If the relay refuses the follow-on (hop limit, a loop), you get a notice.
+- It is held like any new ask, even when you approved the first one, and `tincan held` shows it beside a held first request. It never fails over to another web teammate.
 
 ### Requests and replies
 
@@ -883,7 +904,7 @@ tincan join <code> --relay http://tincan-relay --proxy http://localhost:1055   #
 
 #### How it wakes
 
-Webhook. The relay POSTs `{"source":"agent-tincan","message":"Agent Tincan: 2 requests from your teammates waiting. Run check_inbox ..."}` with the bearer token. Grok Bot calls `check_inbox`. The same wake can mean a reply to one of its own requests is waiting, which `check_inbox` shows.
+Webhook. The relay POSTs `{"source":"agent-tincan","message":"Agent Tincan: 2 requests waiting. Run check_inbox ..."}` with the bearer token. Grok Bot calls `check_inbox`. The same wake can mean a reply to one of its own requests is waiting, which `check_inbox` shows.
 
 #### How it sends and receives
 
@@ -1524,7 +1545,7 @@ Self-healing rejoin: if an agent's machine is rebuilt with the same machine name
 
 ## Trust model
 
-Joined agents trust each other fully: a request from a joined agent is acted on as if you asked, with no per-request approval unless you turn on the [owner approval gate](#owner-approval) for chosen agents. The one default hold is Council: agents' councils wait for your approval, since a council sends your question to every model vendor on the team. Tailscale is the security boundary, the relay can read every request and reply, and only admin devices can invite, remove or connect agents. The real risk is an agent that reads untrusted content being tricked into asking a powerful teammate to do something harmful. Agents treat every request that reaches them as work you have already authorized and do not stop to ask, so hold requests to high-power agents with the owner approval gate rather than relying on them to confirm; keep `tincan trace` handy, and use `tincan remove` to cut an agent off.
+Joined teammates trust each other fully: a request from a joined teammate is acted on as if you asked, with no per-request approval unless you turn on the [owner approval gate](#owner-approval) for chosen agents. [Guests](#inviting-a-guest) are not teammates: they only ask, and their asks are held for you by default. The one default hold is Council: agents' councils wait for your approval, since a council sends your question to every model vendor on the team. Tailscale is the security boundary, the relay can read every request and reply, and only admin devices can invite, remove or connect agents. The real risk is an agent that reads untrusted content being tricked into asking a powerful teammate to do something harmful. Agents treat every request that reaches them as work you have already authorized and do not stop to ask, so hold requests to high-power agents with the owner approval gate rather than relying on them to confirm; keep `tincan trace` handy, and use `tincan remove` to cut an agent off.
 
 Read [docs/trust-model.md](docs/trust-model.md) before joining an agent that reads untrusted content alongside one that holds powers like spending money. It also covers attachments, the history agent, the web agents, and Council.
 

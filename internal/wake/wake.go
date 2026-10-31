@@ -1141,7 +1141,7 @@ func (w *Waker) allow(agent string) bool {
 
 // Message is the wake text for n waiting requests.
 func Message(n int) string {
-	return fmt.Sprintf("Agent Tincan: %d %s from your teammates waiting. Run check_inbox (or `tincan inbox`) before other work to pick them up, then reply to each.", n, plural(n, "request", "requests"))
+	return fmt.Sprintf("Agent Tincan: %d %s waiting. Run check_inbox (or `tincan inbox`) before other work to pick them up, then reply to each.", n, plural(n, "request", "requests"))
 }
 
 // WaitingMessage is the only text a count-only wake carries, which is every
@@ -1161,7 +1161,7 @@ func WaitingMessage(requests, replies int) string {
 	if requests == 1 {
 		then = "reply to it"
 	}
-	return fmt.Sprintf("Agent Tincan: %d %s from your teammates and %d %s waiting. Run check_inbox (or `tincan inbox`) before other work to read the %s and pick up the %s, then %s.",
+	return fmt.Sprintf("Agent Tincan: %d %s and %d %s waiting. Run check_inbox (or `tincan inbox`) before other work to read the %s and pick up the %s, then %s.",
 		requests, plural(requests, "request", "requests"), replies, plural(replies, "reply to your request", "replies to your requests"),
 		plural(replies, "reply", "replies"), plural(requests, "request", "requests"), then)
 }
