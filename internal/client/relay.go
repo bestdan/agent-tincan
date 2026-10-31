@@ -108,6 +108,9 @@ type AgentInfo struct {
 	Queued       int       `json:"queued,omitempty"`
 	OldestQueued time.Time `json:"oldest_queued_at,omitzero"`
 	Claimed      int       `json:"claimed,omitempty"`
+	// Stats is the agent's record over the last 7 days, left out for an
+	// agent with none and by relays that predate it.
+	Stats AgentStats `json:"stats,omitzero"`
 	// NodeID, NodeName and NodeUser name the Tailscale node the agent is
 	// bound to: its stable node id, machine name, and owning login. The
 	// relay fills them only for admin callers, and never for a virtual
@@ -125,6 +128,44 @@ type AgentInfo struct {
 	// woken, and is left out otherwise and by older relays. Its fields sit
 	// at the top level of each roster entry.
 	envelope.Target
+}
+
+// AgentStats is an agent's record of asks finished in a window: counts and
+// a duration, never text. Agent is set in a StatsReport and empty on a
+// roster entry. MedianReplyMS is over answered asks, nil when none has a
+// known reply time; a known median can be 0.
+type AgentStats struct {
+	Agent         string `json:"agent,omitempty"`
+	Answered      int    `json:"answered"`
+	Failed        int    `json:"failed"`
+	Expired       int    `json:"expired"`
+	MedianReplyMS *int64 `json:"median_reply_ms,omitempty"`
+}
+
+// StatsReport is GET /v1/stats: every joined agent's record for asks
+// finished at or after Since.
+type StatsReport struct {
+	Since  time.Time    `json:"since"`
+	Agents []AgentStats `json:"agents"`
+}
+
+// Finished counts the asks the record covers.
+func (s AgentStats) Finished() int { return s.Answered + s.Failed + s.Expired }
+
+// MedianReply is the median reply time for a person to read: "<1s", "45s",
+// "3m", "2h". Empty when it is unknown.
+func (s AgentStats) MedianReply() string {
+	if s.MedianReplyMS == nil {
+		return ""
+	}
+	d := time.Duration(*s.MedianReplyMS) * time.Millisecond
+	switch {
+	case d < time.Second:
+		return "<1s"
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d/time.Second))
+	}
+	return QueueAge(d)
 }
 
 // The statuses a relay reports in AgentInfo.Status. Busy means the agent
@@ -169,6 +210,19 @@ func (a AgentInfo) LastSeen(now time.Time) string {
 		return "never seen"
 	}
 	return "last seen " + ageAgo(now.Sub(last))
+}
+
+// StatsField is the agent's record for a roster line, such as
+// answered=12/13 median=3m, or "" for an agent with none.
+func (a AgentInfo) StatsField() string {
+	if a.Stats.Finished() == 0 {
+		return ""
+	}
+	field := fmt.Sprintf("answered=%d/%d", a.Stats.Answered, a.Stats.Finished())
+	if median := a.Stats.MedianReply(); median != "" {
+		field += " median=" + median
+	}
+	return field
 }
 
 func (a AgentInfo) Backlog(now time.Time) string {
@@ -656,6 +710,14 @@ func (r *Relay) Agents(ctx context.Context) ([]AgentInfo, error) {
 func (r *Relay) Roster(ctx context.Context) (Roster, error) {
 	var out Roster
 	err := r.call(ctx, r.api, "GET", "/v1/agents", nil, &out)
+	return out, err
+}
+
+// Stats reads every joined agent's record over the window since, such as
+// 7d or 12h. An older relay answers its plain 404.
+func (r *Relay) Stats(ctx context.Context, since string) (StatsReport, error) {
+	var out StatsReport
+	err := r.call(ctx, r.api, "GET", "/v1/stats?"+url.Values{"since": {since}}.Encode(), nil, &out)
 	return out, err
 }
 

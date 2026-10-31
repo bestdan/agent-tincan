@@ -196,6 +196,11 @@ type Server struct {
 	// upgrader installs the dist release over the relay binary; nil when off.
 	upgrader SelfUpgrader
 
+	// statsMu guards statsCache and is held across the store read it
+	// fills from, so take it without s.mu.
+	statsMu    sync.Mutex
+	statsCache map[time.Duration]statsEntry
+
 	mu       sync.Mutex
 	lastPoll map[string]time.Time
 	polling  map[string]int // long-polls currently held open, per agent
@@ -292,6 +297,7 @@ func New(dir *identity.Directory, st *store.Store, cfg Config) *Server {
 	s := &Server{cfg: cfg, dir: dir, store: st, hub: newHub(), prep: newChain{}, lastPoll: map[string]time.Time{}, polling: map[string]int{},
 		lastSeen: map[string]time.Time{}, persisted: map[string]time.Time{}, versions: loadVersions(st), blobs: defaultAttachmentDir(st), key: loadRelayKey(st),
 		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, nonces: newNonceBook(), stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
+	s.statsCache = map[time.Duration]statsEntry{}
 	s.lookupAgent = dir.Agent
 	if s.cfg.FailoverPath == "" && st != nil && st.Path() != "" {
 		s.cfg.FailoverPath = filepath.Join(filepath.Dir(st.Path()), FailoverFile)
@@ -431,6 +437,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/trace/{trace}", s.handleTrace)
 	mux.HandleFunc("GET /v1/trace", s.handleRecent)
 	mux.HandleFunc("GET /v1/search", s.handleSearch)
+	mux.HandleFunc("GET /v1/stats", s.handleStats)
 	mux.HandleFunc("GET /v1/admin/audit/verify", s.handleVerify)
 	mux.HandleFunc("GET /v1/admin/wakes/{agent}", s.handleWakes)
 	mux.HandleFunc("POST /v1/admin/relay/upgrade", s.handleSelfUpgrade)
@@ -1577,7 +1584,12 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 // for an admin caller. Only the directory read can fail it; the other
 // reads are logged and the entries carry what the relay still knows.
 func (s *Server) roster(ctx context.Context, admin bool) ([]client.AgentInfo, error) {
-	return s.rosterWith(ctx, admin, false)
+	out, err := s.rosterWith(ctx, admin, false)
+	if err != nil {
+		return nil, err
+	}
+	s.addStats(ctx, out)
+	return out, nil
 }
 
 // rosterWith builds the roster. Display callers take a failed queue read
