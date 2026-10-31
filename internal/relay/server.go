@@ -1922,6 +1922,11 @@ func (s *Server) rosterWith(ctx context.Context, admin, needQueue bool) ([]clien
 		webFacts[a.Name].Apply(a, &info.Target, now)
 		info.WorkingOn, info.WorkingOnOthers = s.currentWorkingOn(a.Name, now)
 		applyStatus(&info, computeStatus(statusFacts{online: info.Online, wake: info.Wake, stat: stat, target: info.Target, hostBusy: s.hostBusy(a.Name, now)}, now, quietUntil))
+		// The same rule for a guest named as the asker: still busy, for no
+		// one a teammate may see.
+		if !admin && guestAsker(agents, info.BusyFor) {
+			info.BusyFor = ""
+		}
 		out = append(out, info)
 	}
 	s.mu.Unlock()

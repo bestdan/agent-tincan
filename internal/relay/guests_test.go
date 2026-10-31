@@ -1014,6 +1014,33 @@ func TestStatsHideGuestsFromTeammates(t *testing.T) {
 	}
 }
 
+// A claim on a guest's ask must not name the guest on a teammate's roster:
+// the agent still shows busy, for no one in particular.
+func TestRosterBusyForHidesGuestFromTeammates(t *testing.T) {
+	m, g := guestMesh(t, relay.Config{})
+	deliveredGuestAsk(t, m, g, "start")
+	busyFor := func(caller string) (string, string) {
+		t.Helper()
+		list, err := m.Client(t, caller).Agents(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range list {
+			if a.Name == "muse" {
+				return a.Status, a.BusyFor
+			}
+		}
+		t.Fatalf("%s: muse is not listed", caller)
+		return "", ""
+	}
+	if status, name := busyFor("instinct"); status != client.StatusBusy || name != "" {
+		t.Errorf("teammate reads status %q, busy_for %q", status, name)
+	}
+	if status, name := busyFor("admin"); status != client.StatusBusy || name != guestName {
+		t.Errorf("admin reads status %q, busy_for %q", status, name)
+	}
+}
+
 // Nothing can be sent to a guest but the relay's own notices.
 func TestTeammatesCannotReachAGuest(t *testing.T) {
 	m, _ := guestMesh(t, relay.Config{})
