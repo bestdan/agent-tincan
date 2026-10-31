@@ -415,7 +415,7 @@ func formatAgents(agents []client.AgentInfo, now time.Time) string {
 
 func askCmd() *cobra.Command {
 	var wait time.Duration
-	var parent string
+	var parent, thenTo string
 	var notify, asJSON, urgent bool
 	var attach []string
 	cmd := &cobra.Command{
@@ -423,12 +423,19 @@ func askCmd() *cobra.Command {
 		Short: "Ask another agent to do something and wait briefly for the reply",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkThenArgs(thenTo, args, notify, attach); err != nil {
+				return err
+			}
 			r, _, err := connect()
 			if err != nil {
 				return err
 			}
 			defer printHeld(cmd, r)
 			body := strings.Join(args[1:], " ")
+			if thenTo != "" {
+				// The message and the follow-on are one argument each.
+				body = args[1]
+			}
 			targets, err := client.NormalizeTargets(strings.Split(args[0], ","), "")
 			if err != nil {
 				return err
@@ -474,7 +481,12 @@ func askCmd() *cobra.Command {
 				}
 				return nil
 			}
-			res, err := r.AskAttached(cmd.Context(), args[0], body, parent, ids, client.ClampWait(wait), urgent)
+			var res client.Result
+			if thenTo != "" {
+				res, err = r.AskThen(cmd.Context(), args[0], body, parent, envelope.Then{To: thenTo, Body: args[2]}, client.ClampWait(wait), urgent)
+			} else {
+				res, err = r.AskAttached(cmd.Context(), args[0], body, parent, ids, client.ClampWait(wait), urgent)
+			}
 			if err != nil {
 				return err
 			}
@@ -486,9 +498,13 @@ func askCmd() *cobra.Command {
 			} else {
 				cmd.Print(client.FormatResult(res))
 			}
+			if thenTo != "" {
+				cmd.Println(client.ThenNote(thenTo))
+			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&thenTo, "then", "", `once answered, have the relay ask this agent too: ask muse "..." --then hermes "file the receipt"`)
 	cmd.Flags().DurationVar(&wait, "wait", client.MaxInlineWait, "how long to wait for the reply (max 20s)")
 	cmd.Flags().StringVar(&parent, "parent", "", "the request you are handling, if this continues it (usually automatic)")
 	cmd.Flags().BoolVar(&urgent, "urgent", false, "time-critical request: wake immediately and deliver first")
@@ -496,6 +512,26 @@ func askCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&attach, "attach", nil, "a local file to attach (repeatable; images or small files)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON and exit 0 answered, 1 failed, 2 pending (--notify: 0 once sent)")
 	return cmd
+}
+
+// checkThenArgs refuses --then on anything but one ask. With --then the
+// message and the follow-on are exactly one argument each: the words of an
+// unquoted message cannot be told from the follow-on's.
+func checkThenArgs(thenTo string, args []string, notify bool, attach []string) error {
+	switch {
+	case thenTo == "":
+		return nil
+	case len(args) != 3:
+		return errors.New(`--then takes one quoted message and one quoted follow-on: tincan ask <agent> "<message>" --then <agent> "<follow-on>"`)
+	case strings.Contains(args[0], ","):
+		return errors.New("--then takes one target")
+	case notify:
+		return errors.New("--then needs an ask, not --notify")
+	case len(attach) != 0:
+		return errors.New("--then does not take --attach")
+	}
+	_, err := client.NormalizeTargets([]string{thenTo}, "")
+	return err
 }
 
 func getCmd() *cobra.Command {
@@ -944,6 +980,9 @@ func heldCmd() *cobra.Command {
 					cmd.Printf("  pass: %s conversation %s -> %s\n", history.SourceLabel(history.Source(req.Pass.Source)), req.Pass.ConversationID, req.Pass.To)
 				case req.PassError != "":
 					cmd.Printf("  pass: will fail: %s\n", req.PassError)
+				}
+				if req.Then != nil {
+					cmd.Printf("  then, once answered: asks %s: %s\n", req.Then.To, req.Then.Body)
 				}
 				for _, a := range req.Attachments {
 					cmd.Printf("  attachment: %s (%d bytes)\n", a.Name, a.Size)

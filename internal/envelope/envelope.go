@@ -28,6 +28,10 @@ const MaxProgressNote = 1024
 // MaxAttachments caps how many attachments one request or reply carries.
 const MaxAttachments = 8
 
+// MaxThenBody caps a follow-on's own text in bytes, so its body always has
+// room for the reply it carries.
+const MaxThenBody = 16 << 10
+
 var (
 	groupID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 	// ErrBodyTooLarge is returned when a body exceeds the configured cap.
@@ -46,6 +50,13 @@ type Attachment struct {
 	Name string `json:"name,omitempty"`
 	MIME string `json:"mime,omitempty"`
 	Size int64  `json:"size,omitempty"`
+}
+
+// Then is a follow-on ask: what the relay sends To, from the first
+// request's sender, once the first request is answered.
+type Then struct {
+	To   string `json:"to"`
+	Body string `json:"body"`
 }
 
 // Kind says what the sender expects back.
@@ -124,6 +135,13 @@ type Request struct {
 	// FromSession is the sender's session label (SessionHeader), a
 	// relay-only routing label inside one agent, never an identity.
 	FromSession string `json:"-"`
+	// Then is the follow-on a send asked for. The relay fills it on a send
+	// response and in the held listing; a delivered request never has it.
+	Then *Then `json:"then,omitempty"`
+	// FollowOf marks a follow-on: the id of the answered request it follows.
+	// Relay-only, so a client can never ask for the policy path that takes
+	// an answered request as a parent.
+	FollowOf string `json:"-"`
 }
 
 // RedactFor hides content that the owner has never released to other agents.
@@ -380,6 +398,7 @@ type sendInput struct {
 	Kind        Kind         `json:"kind"`
 	ParentID    string       `json:"parent_id"`
 	Attachments []Attachment `json:"attachments"`
+	Then        *Then        `json:"then"`
 }
 
 // ParseSend decodes a client's send and attributes it to sender, the agent
@@ -416,11 +435,42 @@ func ParseSend(raw []byte, sender string, maxBody int) (Request, error) {
 	default:
 		return Request{}, fmt.Errorf("send: unknown kind %q", in.Kind)
 	}
+	if err := checkThen(in, sender); err != nil {
+		return Request{}, err
+	}
 	atts, err := attachmentIDs(in.Attachments)
 	if err != nil {
 		return Request{}, fmt.Errorf("send: %w", err)
 	}
-	return Request{Group: in.Group, Urgent: in.Urgent, From: sender, To: in.To, ParentID: in.ParentID, Kind: in.Kind, Body: in.Body, Attachments: atts}, nil
+	return Request{Group: in.Group, Urgent: in.Urgent, From: sender, To: in.To, ParentID: in.ParentID, Kind: in.Kind, Body: in.Body, Attachments: atts, Then: in.Then}, nil
+}
+
+// checkThen refuses a follow-on on anything but a single ask without
+// attachments, and one that could never be sent. It trims the target.
+func checkThen(in sendInput, sender string) error {
+	if in.Then == nil {
+		return nil
+	}
+	in.Then.To = strings.TrimSpace(in.Then.To)
+	switch {
+	case in.Kind != KindAsk:
+		return errors.New("send: then needs an ask")
+	case in.Group != "":
+		return errors.New("send: then takes one target")
+	case len(in.Attachments) != 0:
+		return errors.New("send: then does not take attachments")
+	case in.Then.To == "":
+		return errors.New("send: then needs a target")
+	case in.Then.To == sender:
+		return errors.New("send: then cannot go back to the sender")
+	case in.Then.To == in.To:
+		return errors.New("send: then cannot go back to the first target")
+	case strings.TrimSpace(in.Then.Body) == "":
+		return errors.New("send: then needs a body")
+	case len(in.Then.Body) > MaxThenBody:
+		return fmt.Errorf("send: then: %w (%d > %d bytes)", ErrBodyTooLarge, len(in.Then.Body), MaxThenBody)
+	}
+	return nil
 }
 
 // attachmentIDs keeps only the ids a client names, checking the count and

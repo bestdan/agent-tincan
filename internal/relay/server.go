@@ -264,6 +264,9 @@ type Server struct {
 	// push sends held-ask alerts to subscribed admin phones; nil when off.
 	push *Pusher
 
+	// firing is the follow-ons a fire is working on now (see followups.go).
+	firing map[string]bool
+
 	// stopping is closed by Stop, when the relay begins to shut down.
 	stopping chan struct{}
 	stopOnce sync.Once
@@ -291,7 +294,7 @@ func New(dir *identity.Directory, st *store.Store, cfg Config) *Server {
 	cfg.defaults()
 	s := &Server{cfg: cfg, dir: dir, store: st, hub: newHub(), prep: newChain{}, lastPoll: map[string]time.Time{}, polling: map[string]int{},
 		lastSeen: map[string]time.Time{}, persisted: map[string]time.Time{}, versions: loadVersions(st), blobs: defaultAttachmentDir(st), key: loadRelayKey(st),
-		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, nonces: newNonceBook(), stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
+		versionWritten: map[string]time.Time{}, sessions: map[string]map[string]time.Time{}, socketWake: map[string]map[string]time.Time{}, workingOn: map[string]map[string]workingOnEntry{}, hostStatus: map[string]map[string]hostStatusEntry{}, silent: map[string]silentEpisode{}, nonces: newNonceBook(), firing: map[string]bool{}, stopping: make(chan struct{}), started: cfg.Now(), emailCursor: map[string]time.Time{}, emailRetry: map[string]map[string]wake.MailMessage{}}
 	s.lookupAgent = dir.Agent
 	if s.cfg.FailoverPath == "" && st != nil && st.Path() != "" {
 		s.cfg.FailoverPath = filepath.Join(filepath.Dir(st.Path()), FailoverFile)
@@ -557,6 +560,7 @@ func (s *Server) Sweep(ctx context.Context) {
 		}
 	}
 	s.failoverSweep(ctx)
+	s.sweepFollowOns(ctx)
 	if err := s.store.ExpireWatches(ctx); err != nil {
 		log.Printf("watches: expire: %v", err)
 	}
@@ -742,6 +746,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		// do not come through here.
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("%s: %w", req.To, errPhoneTakesNoRequests))
 		return
+	}
+	if req.Then != nil {
+		if err := s.checkThen(r.Context(), to, req.Then.To); err != nil {
+			writeErr(w, statusFor(err), err)
+			return
+		}
 	}
 	if req.Kind == envelope.KindPing {
 		s.mu.Lock()
@@ -1380,6 +1390,9 @@ func (s *Server) recordReplyWith(ctx context.Context, id, agent string, rep enve
 	}
 	// The reply may have freed the replying agent, if someone watches it.
 	s.checkWatches(ctx, agent)
+	if rep.Status == envelope.StatusAnswered {
+		s.fireFollowOn(ctx, id)
+	}
 	return rep, nil
 }
 
@@ -2244,6 +2257,11 @@ func (s *Server) handleHeld(w http.ResponseWriter, r *http.Request) {
 	for i, req := range reqs {
 		full := req.Body
 		req.Body = approvalPreview(req.Body)
+		if then, ok, err := s.store.FollowOnOf(r.Context(), req.ID); err != nil {
+			log.Printf("held %s: follow-on: %v", req.ID, err)
+		} else if ok {
+			req.Then = &then
+		}
 		out[i] = heldRequest{Request: req}
 		if node != "" {
 			out[i].ApproveNonce, out[i].NonceExpiresAt = s.nonces.issue(nonceKey{id: req.ID, decision: decisionApprove, node: node}, now)

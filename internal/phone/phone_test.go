@@ -84,6 +84,9 @@ func TestScriptsInsertTextOnly(t *testing.T) {
 			t.Errorf("%s names an absolute URL", name)
 		}
 	}
+	if !strings.Contains(read(t, "app.js"), `el("p", "body", item.then.body)`) {
+		t.Error("the held card should show a follow-on's text, as text")
+	}
 	if !strings.Contains(read(t, "app.js"), "textContent") {
 		t.Error("app.js should set text with textContent")
 	}

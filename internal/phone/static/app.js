@@ -245,6 +245,10 @@ function heldCard(entry) {
     li.append(el("p", "meta", "chain: " + item.chain.join(" > ")));
   }
   li.append(el("p", "body", item.body));
+  if (item.then) {
+    li.append(el("p", "meta", "Then, once answered, asks " + item.then.to + ":"));
+    li.append(el("p", "body", item.then.body));
+  }
   const files = item.attachments || [];
   if (files.length) {
     li.append(el("p", "meta", plural(files.length, "attachment") + ":"));

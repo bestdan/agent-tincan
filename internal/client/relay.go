@@ -475,6 +475,32 @@ func (r *Relay) Ask(ctx context.Context, to, body, parent string, wait time.Dura
 	return r.asked(ctx, s, wait)
 }
 
+// ErrThenUnsupported means the relay does not advertise follow-ons. Such a
+// relay would silently drop the then field, so the client refuses to send.
+var ErrThenUnsupported = errors.New("this relay does not support follow-on asks (upgrade the relay)")
+
+// AskThen is Ask with a follow-on: once to answers, the relay sends then as
+// a new ask from this agent, with the reply attached as data.
+func (r *Relay) AskThen(ctx context.Context, to, body, parent string, then envelope.Then, wait time.Duration, urgent bool) (Result, error) {
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("check relay capabilities: %w", err)
+	}
+	if !caps.Then {
+		return Result{}, ErrThenUnsupported
+	}
+	s, err := r.send(ctx, map[string]any{"to": to, "body": body, "kind": envelope.KindAsk, "parent_id": parent, "urgent": urgent, "then": then})
+	if err != nil {
+		return Result{}, err
+	}
+	return r.asked(ctx, s, wait)
+}
+
+// ThenNote is what an asker is told about a follow-on it just queued.
+func ThenNote(to string) string {
+	return "Once this is answered, the relay sends your follow-on to " + to + ". If it can't, you get a notice."
+}
+
 // What a poll does with unseen replies to this agent's own requests. No
 // poll marks a reply seen; a client that shows replies to its agent
 // acknowledges them afterwards with AckReplies. A poll that names none of

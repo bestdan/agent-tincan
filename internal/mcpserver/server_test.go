@@ -1284,3 +1284,45 @@ func TestRoomToolsOverMCP(t *testing.T) {
 // membershipTool matches a tool name that suggests changing who is in a
 // room.
 var membershipTool = regexp.MustCompile(`member|add|remove|create|join|invite|kick|leave|delete`)
+
+func TestAskThenOverMCP(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	cs := session(t, m, "grokbot")
+	out := call(t, cs, "ask", map[string]any{"to": "muse", "message": "find it", "wait_seconds": 1, "then": map[string]any{"to": "instinct", "message": "file it"}})
+	if strings.HasPrefix(out, "ERROR") || !strings.Contains(out, "follow-on to instinct") {
+		t.Fatalf("ask: %q", out)
+	}
+	muse := m.Client(t, "muse")
+	inbox, err := muse.Poll(t.Context(), time.Millisecond)
+	if err != nil || len(inbox.Requests) != 1 {
+		t.Fatalf("first: %+v %v", inbox, err)
+	}
+	id := inbox.Requests[0].ID
+	if _, err := muse.Claim(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := muse.Reply(t.Context(), id, "found", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err = m.Client(t, "instinct").Poll(t.Context(), time.Millisecond)
+	if err != nil || len(inbox.Requests) != 1 || !strings.HasPrefix(inbox.Requests[0].Body, "file it\n") {
+		t.Fatalf("follow-on: %+v %v", inbox, err)
+	}
+}
+
+func TestAskThenRefusedShapesOverMCP(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	cs := session(t, m, "grokbot")
+	then := map[string]any{"to": "instinct", "message": "file it"}
+	for name, args := range map[string]map[string]any{
+		"also":   {"to": "muse", "message": "m", "also": []string{"grokbot2"}, "then": then},
+		"notify": {"to": "muse", "message": "m", "notify": true, "then": then},
+		"attach": {"to": "muse", "message": "m", "attach": []string{"x.txt"}, "then": then},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if out := call(t, cs, "ask", args); !strings.HasPrefix(out, "ERROR") {
+				t.Fatalf("ask: %q", out)
+			}
+		})
+	}
+}

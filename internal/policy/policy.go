@@ -98,7 +98,14 @@ func (p *Policy) Prepare(ctx context.Context, req *envelope.Request) error {
 	}
 	if ok {
 		req.ParentID, req.TraceID, req.Hop = parent.ID, parent.TraceID, parent.Hop+1
-		req.Chain = append(slices.Clone(parent.Chain), req.From)
+		// A follow-on's sender is already in the chain, as the first
+		// request's sender; the agent that answered joins it, so a follow-on
+		// back to that agent is a cycle.
+		last := req.From
+		if req.FollowOf != "" {
+			last = parent.To
+		}
+		req.Chain = append(slices.Clone(parent.Chain), last)
 	} else if guarded {
 		req.ParentID, req.TraceID, req.Hop = "", "", guard.Hop+1
 		req.Chain = append(slices.Clone(guard.Chain), req.From)
@@ -131,7 +138,9 @@ func (p *Policy) Prepare(ctx context.Context, req *envelope.Request) error {
 		p.Refund(*req)
 		return reject(http.StatusServiceUnavailable, err)
 	}
-	p.holdByKind(ctx, req, parent, ok)
+	// A follow-on has no parent here: the owner's approval of the request it
+	// follows covers that request, not whatever was queued to run after it.
+	p.holdByKind(ctx, req, parent, ok && req.FollowOf == "")
 	return nil
 }
 
@@ -213,8 +222,18 @@ func (p *Policy) holdByKind(ctx context.Context, req *envelope.Request, parent e
 // parent resolves the request's parent: the one it names, or else the
 // request the sender currently has claimed. The model cannot opt out of a
 // chain by leaving the parent blank. A sender that names a session continues
-// only a claim made from that session or with none (see Prepare).
+// only a claim made from that session or with none (see Prepare). A
+// follow-on's parent is the request it follows, answered and addressed to
+// someone else, which is why FollowOf is relay-only: a client's parent_id
+// keeps both checks.
 func (p *Policy) parent(ctx context.Context, req *envelope.Request) (envelope.Request, bool, error) {
+	if req.FollowOf != "" {
+		parent, _, err := p.st.Request(ctx, req.FollowOf)
+		if errors.Is(err, store.ErrNotFound) {
+			return envelope.Request{}, false, reject(http.StatusBadRequest, ErrBadParent)
+		}
+		return parent, err == nil, err
+	}
 	if req.ParentID == "" {
 		if req.FromSession != "" {
 			return p.st.OpenClaimFor(ctx, req.From, req.FromSession)

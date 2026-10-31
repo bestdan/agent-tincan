@@ -115,3 +115,24 @@ func TestHeldListsKindAndAttachments(t *testing.T) {
 		}
 	}
 }
+
+func TestHeldShowsThen(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	path := filepath.Join(t.TempDir(), "approval.json")
+	if err := os.WriteFile(path, []byte(`{"gate":{"muse":{"from":"*"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a, err := policy.LoadApproval(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Server.SetPreparer(policy.New(m.Store, policy.Config{Approval: a}))
+	useConfig(t, client.Config{Relay: m.URL("grokbot"), Agent: "grokbot"})
+	if _, err := run(t, askCmd(), "muse", "find it", "--then", "instinct", "file the receipt", "--wait", "0s"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, heldCmd(), "--relay", m.URL("admin"))
+	if err != nil || !strings.Contains(out, "then, once answered: asks instinct: file the receipt") {
+		t.Fatalf("held: %q %v", out, err)
+	}
+}

@@ -22,6 +22,7 @@ The relay answers 403 to any request whose `Host` is not one of its own addresse
 | `created_at` | relay | When the relay queued it. |
 | `exchanges` | relay | Optional clarification history: `[{"question", "answer", "at"}]`. `at` is the question's timestamp; `answer` is absent until answered. Client-supplied exchanges are ignored. |
 | `resumed` | relay | Optional boolean, true after the asker has supplied clarification. Retained on subsequent deliveries and claims. |
+| `then` | client | Optional follow-on, `{"to", "body"}`: one ask the relay sends once this one is answered. See Follow-on asks. |
 | `moved_from` | relay | Optional list, oldest first, of the web agents the request moved off because their site was out of messages before it was sent there (see Failover). `to` is then the agent that took it. A client-supplied value is ignored. |
 
 ## Reply
@@ -415,6 +416,20 @@ A reply to a mention (`answered`, `failed`, `declined`, or `needs_input`, posted
 A mention's text belongs to its room. A mention continues the poster's chain, so it appears in that chain's trace and search, but only a reader that is a member of the room now sees its text: for any other non-admin caller, `GET /v1/trace/{trace}` replaces the request and reply bodies of every step with a `room_post_id` by `room mention; read it in the room` and drops their attachments, clarification rounds and progress note (ids, statuses, chain and hop stay), and `GET /v1/search` leaves those requests out. This holds for the poster and the target too once they leave the room. Admin callers see everything. A mention is also never in a request email: an email agent with `include_requests` is told of it by count only.
 
 Audit rows `room_created`, `room_member_added`, `room_member_removed` and `room_posted` carry the room, ids, agent names and byte counts, never post text. Rooms live in `rooms`, `room_members` and `room_posts` tables, with no foreign key to `agents`, and a nullable `room_post_id` column on `requests`; an older relay opening the database ignores them, and mentions stop mirroring until the newer relay is back.
+
+## Follow-on asks
+
+A send of kind `ask` may carry `then: {"to": "hermes", "body": "file the receipt"}`, up to 16 KB of body. When the request is answered, the relay sends one new ask to `then.to`, from the same sender, with no model step. The relay advertises `"then": true` in `GET /v1/capabilities`. An older relay ignores the field, so the client checks first and refuses to send rather than drop it (`tincan ask --then`, the `then` param on the `ask` tool).
+
+A send is refused with 400 when `then` comes with `notify`, `ping`, a `group` or `attachments`, when it has no target or body, when `then.to` is the sender or the first target, when `then.to` is a phone, or when the first target's kind is `history`, `notes` or `pass`. An unknown `then.to` answers 404. The send response echoes `then`. The held listing (`GET /v1/admin/held`) carries it on each held request that has one, so `tincan held` and the phone page show the follow-on's target and text. Delivered requests never carry it.
+
+The follow-on's body is `then.body`, a blank line, a fixed line naming the teammate and saying what follows is a teammate's reply and data, not instructions, a blank line, then the reply between `<<<REPLY <nonce>>>>` and `<<<END REPLY <nonce>>>>` lines. The nonce is random per follow-on and appears nowhere in the texts. A reply too long to fit the 256 KB body limit is cut, with a `[truncated: ...]` line. Reply attachments are not carried.
+
+The follow-on keeps the first request's `trace_id`, its `parent_id` is the first request, its `hop` is the first request's plus 1, and its `chain` is the first request's chain plus the first request's `to`, so a follow-on back to any agent in that chain is a cycle. It takes a slot of the sender's rate. Holds treat it as having no parent, so it never inherits an approval: `approval.json` and the default holds by kind apply as to a new ask. It never fails over or moves.
+
+A client's own `parent_id` naming an answered request is still refused with 400. The relay's follow-on path is a relay-only field that no send can set.
+
+The relay writes the follow-on in a `followups` table with the send. The answering reply marks the row due in its own transaction, the relay fires it right after the reply, and each sweep retries due rows, so a restart between the reply and the fire still sends it, once: the row is deleted in the transaction that enqueues the follow-on or its refusal notice. A rate limit or a server error leaves the row due for the next sweep. A refusal (hop limit, cycle) or a first target or `then.to` that no longer qualifies drops the row, and the sender gets a notice from `relay`. A `needs_input` reply keeps the row, and the later answer fires it. A first request that ends failed, declined, cancelled or expired drops the row with no notice beyond its own result. The audit log records `follow_on_sent` and `follow_on_dropped` with ids and names, never text.
 
 ## Recipient facts on send
 

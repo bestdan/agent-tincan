@@ -302,9 +302,7 @@ func (s *Server) polledRecently(last, now time.Time) bool {
 // asker's own request id and a preview of what they asked, so a fresh
 // session knows which request it is about.
 func (s *Server) noticeAsker(ctx context.Context, req envelope.Request, note string) {
-	body := fmt.Sprintf("About your request %s to %s (you asked: %s): %s No reply needed.",
-		req.ID, req.To, strings.Join(strings.Fields(approvalPreview(req.Body)), " "), note)
-	n := envelope.Request{From: "relay", To: req.From, Kind: envelope.KindNotify, Hop: 1, Chain: []string{"relay"}, Body: body}
+	n := askerNotice(req, note)
 	n, err := s.store.Enqueue(ctx, n, s.requestTTL(ctx, n.To))
 	if err != nil {
 		log.Printf("wake notice %s: tell %s: %v", req.ID, req.From, err)
@@ -313,4 +311,11 @@ func (s *Server) noticeAsker(ctx context.Context, req envelope.Request, note str
 	}
 	s.record(ctx, "queued", n.ID, n.TraceID, "relay", store.DetailJSON(map[string]any{"wake_notice_for": req.ID, "to": n.To}))
 	s.noticeQueued(ctx, n)
+}
+
+// askerNotice is the notify noticeAsker sends.
+func askerNotice(req envelope.Request, note string) envelope.Request {
+	body := fmt.Sprintf("About your request %s to %s (you asked: %s): %s No reply needed.",
+		req.ID, req.To, strings.Join(strings.Fields(approvalPreview(req.Body)), " "), note)
+	return envelope.Request{From: "relay", To: req.From, Kind: envelope.KindNotify, Hop: 1, Chain: []string{"relay"}, Body: body}
 }

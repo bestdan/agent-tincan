@@ -454,7 +454,7 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 
 | MCP tool | CLI | What it does |
 |---|---|---|
-| `ask` | `tincan ask <agent[,agent...]> <message>` | Ask one or up to 8 distinct teammates. MCP uses `to: "a", also: ["b"]`. Waits up to 20 seconds, returning labeled replies and a group id for multiple targets. `urgent: true` (`--urgent`) marks time-critical requests. `notify` (`--notify`) sends without expecting a reply. `attach` (`--attach <path>`) adds files. `--json` prints JSON (see below). |
+| `ask` | `tincan ask <agent[,agent...]> <message>` | Ask one or up to 8 distinct teammates. MCP uses `to: "a", also: ["b"]`. Waits up to 20 seconds, returning labeled replies and a group id for multiple targets. `urgent: true` (`--urgent`) marks time-critical requests. `notify` (`--notify`) sends without expecting a reply. `attach` (`--attach <path>`) adds files. `then` (`--then <agent> "<follow-on>"`) queues one follow-on, see below. `--json` prints JSON (see below). |
 | `get_reply` | `tincan get <id>` | Check on a request or group you sent, optionally waiting up to 20 seconds. `--json` prints JSON. |
 | `check_inbox` | `tincan inbox` | Take waiting requests (this claims them, so no one else handles them) and replies to your own requests you have not seen yet. `--json` prints JSON. |
 | `claim` | (done by `inbox`) | Mark a delivered request as yours. `check_inbox` already does this. |
@@ -495,6 +495,15 @@ A few commands are CLI only, with no MCP tool: `tincan ping <agent>` checks a te
 - A send the relay rejects appears on its own target, and the requests that were queued are still tracked. A poll failure shows as an `error` on that result, keeping its id and last known status beside the other replies. A multi-target MCP notify returns a tool error if any upload or send fails, with the per-target results in its content.
 - The relay accepts at most 8 requests per sender and group tag; further sends return HTTP 400. `GET /v1/groups/{id}` lists only the accepted members (`id` and `to`), without bodies or replies and without marking replies seen. Clients reconcile that list with their own send errors, so a request whose send response was lost is recovered.
 - With an older relay, the group id works only in the client instance that sent it (such as the same MCP server); a later CLI run must use the individual request ids.
+
+### Follow-on asks
+
+`tincan ask muse "find the receipt" --then hermes "file the receipt"` (MCP `then: {"to": "hermes", "message": "file the receipt"}`) has the relay ask hermes as soon as muse answers, with no model turn in between, so the follow-through does not need your session to be alive.
+
+- The follow-on is one ask from you, in the same chain. Its body is your text, then muse's reply between random delimiters with a line saying it is a teammate's reply and data, not instructions. That line is an instruction to a model, not a control ([trust model](docs/trust-model.md#follow-on-asks)).
+- With `--then`, quote the message and the follow-on as one argument each. It works on a single ask, not with `--notify`, `--attach` or several targets, and takes one follow-on. It is refused after a `history`, `notes` or `pass` teammate, and a relay that predates it refuses rather than drops it.
+- Only an answered request fires it: `needs_input` keeps it waiting, and failed, declined, cancelled or expired drop it. If the relay refuses the follow-on (hop limit, a loop), you get a notice.
+- It is held like any new ask, even when you approved the first one, and `tincan held` shows it beside a held first request. It never fails over to another web teammate.
 
 ### Requests and replies
 
