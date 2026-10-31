@@ -130,6 +130,10 @@ type Request struct {
 	// goes to any session. The relay drops it when the request moves to
 	// another target.
 	Project string `json:"project,omitempty"`
+	// NoParent starts a new chain whatever claims the sender holds. Only the
+	// relay sets it, on a scheduled ask's fire: the claim the asker holds at
+	// fire time has nothing to do with an ask made earlier.
+	NoParent bool `json:"-"`
 }
 
 // MaxProject bounds a project label.
@@ -565,6 +569,23 @@ const (
 	WebSignedOut     = "signed_out"
 	WebLimited       = "limited"
 )
+
+// Schedule is an ask the relay sends later, once or on a repeat. A one-shot
+// has no EverySeconds and goes when it fires. LastRequest is the request
+// its latest fire made, and Blocked is set while its latest fire was
+// rejected.
+type Schedule struct {
+	ID           int64     `json:"id"`
+	From         string    `json:"from"`
+	To           string    `json:"to"`
+	Body         string    `json:"body"`
+	Urgent       bool      `json:"urgent,omitempty"`
+	NextAt       time.Time `json:"next_at"`
+	EverySeconds int64     `json:"every_seconds,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	LastRequest  string    `json:"last_request,omitempty"`
+	Blocked      bool      `json:"blocked,omitempty"`
+}
 
 // MaxRoomPost caps a room post's body in bytes.
 const MaxRoomPost = 16 << 10

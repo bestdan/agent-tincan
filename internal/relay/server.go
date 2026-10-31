@@ -413,6 +413,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/agents/self/status", s.handleHostStatus)
 	mux.HandleFunc("POST /v1/watches", s.handleWatch)
 	mux.HandleFunc("POST /v1/leases", s.handleLeaseAcquire)
+	mux.HandleFunc("POST /v1/schedules", s.handleCreateSchedule)
 	mux.HandleFunc("GET /v1/rooms", s.handleRooms)
 	mux.HandleFunc("GET /v1/rooms/{room}/posts", s.handleRoomRead)
 	mux.HandleFunc("POST /v1/rooms/{room}/posts", s.handleRoomPost)
@@ -450,6 +451,8 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
 	mux.HandleFunc("GET /v1/leases", s.handleLeases)
 	mux.HandleFunc("DELETE /v1/leases", s.handleLeaseRelease)
+	mux.HandleFunc("GET /v1/schedules", s.handleSchedules)
+	mux.HandleFunc("DELETE /v1/schedules/{id}", s.handleCancelSchedule)
 	mux.HandleFunc("GET /v1/attachments/{id}", s.handleApprovalFetch)
 	mux.HandleFunc("GET "+phone.Prefix, s.handlePhone)
 	mux.HandleFunc("GET /v1/admin/push/key", s.handlePushKey)
@@ -573,6 +576,7 @@ func (s *Server) Sweep(ctx context.Context) {
 	}
 	s.checkWatches(ctx, "")
 	s.expireLeases(ctx)
+	s.fireSchedules(ctx)
 }
 
 // wakeRequeued wakes req's target for a request it may have looked past: a
@@ -772,16 +776,8 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errAttachmentsOff)
 		return
 	}
-	to, ok, err := s.dir.Agent(r.Context(), req.To)
-	if err != nil || !ok {
-		writeErr(w, http.StatusNotFound, errors.New("no such agent: "+req.To))
-		return
-	}
-	if to.Kind == onboard.KindPhone {
-		// The phone page never reads an inbox, so a send to it would sit
-		// unanswered. Replies to its own asks, and the relay's own notices,
-		// do not come through here.
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("%s: %w", req.To, errPhoneTakesNoRequests))
+	if err := s.checkSendTarget(r.Context(), req.To); err != nil {
+		writeErr(w, statusFor(err), err)
 		return
 	}
 	if req.Kind == envelope.KindPing {
@@ -833,6 +829,22 @@ func (s *Server) withProjectMatch(t *envelope.Target, req envelope.Request) *env
 	}
 	t.ProjectMatch = match
 	return t
+}
+
+// checkSendTarget refuses a send to name unless it is a joined agent that
+// takes requests. The errors carry their HTTP status (statusFor).
+func (s *Server) checkSendTarget(ctx context.Context, name string) error {
+	to, ok, err := s.dir.Agent(ctx, name)
+	if err != nil || !ok {
+		return &StatusError{Code: http.StatusNotFound, Err: errors.New("no such agent: " + name)}
+	}
+	if to.Kind == onboard.KindPhone {
+		// The phone page never reads an inbox, so a send to it would sit
+		// unanswered. Replies to its own asks, and the relay's own notices,
+		// do not come through here.
+		return &StatusError{Code: http.StatusBadRequest, Err: fmt.Errorf("%s: %w", name, errPhoneTakesNoRequests)}
+	}
+	return nil
 }
 
 // submit takes a new request from req.From through every step a send

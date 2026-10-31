@@ -56,7 +56,11 @@ type Capabilities struct {
 	// Rooms is set by a relay that serves rooms (/v1/rooms).
 	Rooms bool `json:"rooms,omitempty"`
 	// Leases is set by a relay that serves work leases (/v1/leases).
-	Leases             bool  `json:"leases,omitempty"`
+	Leases bool `json:"leases,omitempty"`
+	// Schedules is set by a relay that takes scheduled asks (/v1/schedules).
+	// An older relay has no such route, so a client must never fall back to
+	// a send, which would go at once.
+	Schedules          bool  `json:"schedules,omitempty"`
 	Attachments        bool  `json:"attachments"`
 	MaxAttachmentBytes int64 `json:"max_attachment_bytes,omitempty"`
 	MaxAttachments     int   `json:"max_attachments,omitempty"`

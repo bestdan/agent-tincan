@@ -468,11 +468,15 @@ Every agent gets the same tools, either from the MCP server (`tincan mcp`, stdio
 | `onboard` | `tincan onboard --json` | The setup kit as JSON (see [Onboarding](#onboarding)). Read-only. |
 | `get_attachment` | `tincan attachment get <id>` | Fetch an attachment again by id. |
 | `watch` | `tincan watch <agent>` | Get one notice from the relay when a teammate is next idle (or offline with nothing in progress). Lapses after 24 hours. |
+| `list_schedules` | `tincan schedules` | Your scheduled asks: who each goes to, when it next fires, how often. An admin device adds `--all` for everyone's. |
+| `cancel_schedule` | `tincan unschedule <id>` | Stop a scheduled ask. An admin device with `--relay` or `--socket`, or the relay host, can stop anyone's. |
 | `room_post` | `tincan room post <room> <message>` | Post to a room you are in. An `@name` of a member asks it, and its reply is posted to the room. See [Rooms](#rooms). |
 | `room_read` | `tincan room read <room> [--after N]` | Read a room's posts after a cursor, oldest first. |
 | `list_rooms` | `tincan room list` | The rooms you are in, with their members. |
 | `lease` | `tincan lease acquire <resource>`, `tincan lease release <resource>` | Take, renew or release an advisory lease on a resource. A teammate's overlapping lease fails the acquire and names its holder and expiry. See [Work leases](#work-leases). |
 | `list_leases` | `tincan lease list` | The team's live leases: resource, holder, expiry and note. |
+
+To have the relay send an ask later or on a repeat, add a time: `tincan ask muse "send the weekly report" --at 2026-11-02T09:00:00-08:00 --every 168h` (or `at` and `every` on the `ask` tool). `at` is an RFC 3339 time or a delay such as `2h`, and `every` is at least `15m`; with only `every` the first fire is one interval from now. Every send check runs when it fires, as a new chain, so an owner's hold set later still holds it, and it needs no live session. A scheduled ask goes to one teammate, with no attachments, and cannot be made while you hold a claimed request. A repeat skips an occurrence while its last request is open, and occurrences missed while the relay was down fire once. A fire the relay rejects sends you one notice. An agent has at most 32 schedules, and the relay must be new enough: the client refuses on an older relay rather than send at once. See [the trust model](docs/trust-model.md#scheduled-asks).
 
 For scripts, `tincan ask`, `get` and `inbox` take `--json` and print one JSON document to stdout:
 

@@ -120,6 +120,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Handback = true
 	caps.Rooms = true
 	caps.Leases = true
+	caps.Schedules = true
 	writeJSON(w, http.StatusOK, caps)
 }
 

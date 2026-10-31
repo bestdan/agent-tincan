@@ -122,7 +122,7 @@ func setRelay(cfg *client.Config, url string) {
 }
 
 func agentCmds() []*cobra.Command {
-	return []*cobra.Command{heldCmd(), approvalCmd("approve"), approvalCmd("deny"), joinCmd(), inviteCmd(), kindCmd(), goodAtCmd(), removeCmd(), agentsCmd(), askCmd(), getCmd(), inboxCmd(), progressCmd(), replyCmd(), answerCmd(), cancelCmd(), waitCmd(), watchCmd()}
+	return []*cobra.Command{heldCmd(), approvalCmd("approve"), approvalCmd("deny"), joinCmd(), inviteCmd(), kindCmd(), goodAtCmd(), removeCmd(), agentsCmd(), askCmd(), getCmd(), inboxCmd(), progressCmd(), replyCmd(), answerCmd(), cancelCmd(), waitCmd(), watchCmd(), schedulesCmd(), unscheduleCmd()}
 }
 
 func joinCmd() *cobra.Command {
@@ -421,13 +421,18 @@ func formatAgents(agents []client.AgentInfo, now time.Time) string {
 
 func askCmd() *cobra.Command {
 	var wait time.Duration
-	var parent, project string
+	var parent, project, at, every string
 	var notify, asJSON, urgent bool
 	var attach []string
 	cmd := &cobra.Command{
 		Use:   "ask <agent[,agent...]> <message...>",
 		Short: "Ask another agent to do something and wait briefly for the reply",
-		Args:  cobra.MinimumNArgs(2),
+		Long: `Ask another agent to do something and wait briefly for the reply.
+
+With --at, --every or both the relay sends the ask later or on a repeat
+instead, as a new request with every send check applied at that time.
+"tincan schedules" lists yours and "tincan unschedule" stops one.`,
+		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := envelope.ValidProject(project); err != nil {
 				return err
@@ -442,6 +447,14 @@ func askCmd() *cobra.Command {
 			targets, err := client.NormalizeTargets(strings.Split(args[0], ","), "")
 			if err != nil {
 				return err
+			}
+			// Changed, not the values: an empty --at "$WHEN" asked for a
+			// schedule and must never turn into a send now.
+			if cmd.Flags().Changed("at") || cmd.Flags().Changed("every") {
+				if len(targets) > 1 || notify || parent != "" || len(attach) > 0 {
+					return errors.New("a scheduled ask goes to one teammate, with no --notify, --parent or --attach")
+				}
+				return scheduleAsk(cmd, r, client.ScheduledAsk{To: targets[0], Body: body, Urgent: urgent}, at, every, asJSON)
 			}
 			if len(targets) > 1 {
 				kind := envelope.KindAsk
@@ -507,6 +520,8 @@ func askCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&notify, "notify", false, "send without waiting for a reply")
 	cmd.Flags().StringArrayVar(&attach, "attach", nil, "a local file to attach (repeatable; images or small files)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print JSON and exit 0 answered, 1 failed, 2 pending (--notify: 0 once sent)")
+	cmd.Flags().StringVar(&at, "at", "", "have the relay send this later: an RFC 3339 time, or a delay such as 2h")
+	cmd.Flags().StringVar(&every, "every", "", "have the relay send this on a repeat, such as 1h (at least 15m)")
 	return cmd
 }
 

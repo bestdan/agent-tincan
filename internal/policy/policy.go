@@ -88,7 +88,7 @@ func (p *Policy) Prepare(ctx context.Context, req *envelope.Request) error {
 	// for the cycle, hop, and allowlist checks, and only starts its own
 	// trace.
 	guard, guarded := parent, ok
-	if !ok && req.ParentID == "" && req.FromSession != "" {
+	if !ok && req.ParentID == "" && req.FromSession != "" && !req.NoParent {
 		if guard, guarded, err = p.st.OpenClaim(ctx, req.From); err != nil {
 			return err
 		}
@@ -213,8 +213,12 @@ func (p *Policy) holdByKind(ctx context.Context, req *envelope.Request, parent e
 // parent resolves the request's parent: the one it names, or else the
 // request the sender currently has claimed. The model cannot opt out of a
 // chain by leaving the parent blank. A sender that names a session continues
-// only a claim made from that session or with none (see Prepare).
+// only a claim made from that session or with none (see Prepare). A relay
+// fire (NoParent) has no parent, whatever the sender holds.
 func (p *Policy) parent(ctx context.Context, req *envelope.Request) (envelope.Request, bool, error) {
+	if req.NoParent {
+		return envelope.Request{}, false, nil
+	}
 	if req.ParentID == "" {
 		if req.FromSession != "" {
 			return p.st.OpenClaimFor(ctx, req.From, req.FromSession)

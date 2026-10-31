@@ -351,12 +351,7 @@ func renderTopFrame(f topFrame, width, height int) string {
 
 // Relay text is data, including when it contains terminal control sequences.
 func topText(s string, width int) string {
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) {
-			return ' '
-		}
-		return r
-	}, s)
+	s = client.TerminalSafe(s)
 	cells := 0
 	for _, r := range s {
 		cells += topRuneWidth(r)
