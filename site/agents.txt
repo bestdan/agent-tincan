@@ -685,10 +685,11 @@ To have a teammate asked later or on a repeat, call ask with at (an RFC 3339
 time, or a delay such as 2h), every (such as 1h, at least 15m) or both (or run
 `tincan ask <agent> "<message>" --at <time> --every <interval>`). The relay
 sends it then as a new request, with every send check applied at that time, and
-the reply comes like any other. It goes to one teammate with no attachments, and
-you cannot schedule while you hold a claimed request. A repeat skips a turn while
-its last request is open. list_schedules (or `tincan schedules`) shows yours and
-cancel_schedule (or `tincan unschedule <id>`) stops one.
+the reply comes like any other. It goes to one teammate with no attachments,
+project or then, and you cannot schedule while you hold a claimed request. A
+repeat skips a turn while its last request is open. list_schedules (or `tincan
+schedules`) shows yours and cancel_schedule (or `tincan unschedule <id>`) stops
+one.
 
 Rooms are threads the owner shares with chosen teammates. list_rooms (or
 `tincan room list`) shows the rooms you are in, room_read (or `tincan room read
