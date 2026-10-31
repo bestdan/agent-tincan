@@ -1058,6 +1058,30 @@ func TestConnectGuestRefusesNoHoldAndReplace(t *testing.T) {
 	}
 }
 
+// A connect that could not mint a code gave nobody a way in, so it must not
+// keep the name: the owner's retry would be refused as taken.
+func TestConnectGuestFreesTheNameWhenNoCodeIsMade(t *testing.T) {
+	e := a2aSetup(t, museAndGrokbot)
+	db := e.m.Store.DB()
+	if _, err := db.ExecContext(t.Context(), `CREATE TRIGGER no_codes BEFORE INSERT ON gw_codes BEGIN SELECT RAISE(ABORT, 'no codes'); END`); err != nil {
+		t.Fatal(err)
+	}
+	admin := e.m.Client(t, "admin")
+	terms := client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600}
+	if _, err := admin.ConnectGuest(t.Context(), "pal", terms); err == nil {
+		t.Fatal("connect succeeded with no code")
+	}
+	if _, ok, _ := e.m.Dir.Agent(t.Context(), "pal"); ok {
+		t.Fatal("a failed connect left pal behind")
+	}
+	if _, err := db.ExecContext(t.Context(), `DROP TRIGGER no_codes`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.ConnectGuest(t.Context(), "pal", terms); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+}
+
 // A removal on a relay with no gateway leaves tokens on disk. They must not
 // come back to life when the name is connected again, least of all as a
 // teammate's.
