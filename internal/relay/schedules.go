@@ -23,9 +23,9 @@ const (
 	// maxScheduleInterval is the longest; it also keeps every_seconds from
 	// overflowing the arithmetic on it.
 	maxScheduleInterval = 366 * 24 * time.Hour
-	// MaxSchedulePage is the most schedules one listing returns. A preview
-	// is 200 characters, so a page stays well under the client's 4 MiB read
-	// limit however many agents an admin listing covers.
+	// MaxSchedulePage is the most schedules one page of a listing returns.
+	// A preview is 200 characters, so a page stays well under the client's
+	// 4 MiB read limit however many agents an admin listing covers.
 	MaxSchedulePage = 500
 )
 
@@ -164,15 +164,19 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 	} else if owner = s.agent(w, r); owner == "" {
 		return
 	}
+	// A client that names no page gets the whole listing, as it always has.
+	paged := r.URL.Query().Has("after")
 	var after int64
-	if v := r.URL.Query().Get("after"); v != "" {
+	limit := -1
+	if paged {
 		var err error
-		if after, err = strconv.ParseInt(v, 10, 64); err != nil || after < 0 {
+		if after, err = strconv.ParseInt(r.URL.Query().Get("after"), 10, 64); err != nil || after < 0 {
 			writeErr(w, http.StatusBadRequest, errors.New("after must be a schedule id"))
 			return
 		}
+		limit = MaxSchedulePage + 1
 	}
-	list, err := s.store.Schedules(r.Context(), owner, after, MaxSchedulePage+1)
+	list, err := s.store.Schedules(r.Context(), owner, after, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -181,7 +185,7 @@ func (s *Server) handleSchedules(w http.ResponseWriter, r *http.Request) {
 		list = []envelope.Schedule{}
 	}
 	out := map[string]any{}
-	if len(list) > MaxSchedulePage {
+	if paged && len(list) > MaxSchedulePage {
 		list = list[:MaxSchedulePage]
 		out["next_after"] = list[len(list)-1].ID
 	}

@@ -65,17 +65,14 @@ func Schedules(ctx context.Context, c Rawer, all bool) ([]envelope.Schedule, err
 	if err := requireSchedules(ctx, c); err != nil {
 		return nil, err
 	}
-	q := url.Values{}
+	q := url.Values{"after": {"0"}}
 	if all {
 		q.Set("all", "1")
 	}
 	var list []envelope.Schedule
 	var after int64
 	for {
-		path := "/v1/schedules"
-		if len(q) > 0 {
-			path += "?" + q.Encode()
-		}
+		path := "/v1/schedules?" + q.Encode()
 		var out struct {
 			Schedules []envelope.Schedule `json:"schedules"`
 			NextAfter int64               `json:"next_after"`

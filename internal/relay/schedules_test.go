@@ -588,11 +588,19 @@ func TestScheduleListPagesAcrossAgents(t *testing.T) {
 		Schedules []envelope.Schedule `json:"schedules"`
 		NextAfter int64               `json:"next_after"`
 	}
-	if err := m.admin.Raw(t.Context(), "GET", "/v1/schedules?all=1", nil, &page); err != nil {
+	if err := m.admin.Raw(t.Context(), "GET", "/v1/schedules?all=1&after=0", nil, &page); err != nil {
 		t.Fatal(err)
 	}
 	if len(page.Schedules) != relay.MaxSchedulePage || page.NextAfter != page.Schedules[len(page.Schedules)-1].ID {
 		t.Fatalf("page has %d schedules, next_after %d", len(page.Schedules), page.NextAfter)
+	}
+	// A client from before pages reads one response, so it gets everything.
+	page.Schedules, page.NextAfter = nil, 0
+	if err := m.admin.Raw(t.Context(), "GET", "/v1/schedules?all=1", nil, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Schedules) != want || page.NextAfter != 0 {
+		t.Fatalf("unpaged listing has %d schedules, next_after %d", len(page.Schedules), page.NextAfter)
 	}
 	list, err := client.Schedules(t.Context(), m.admin, true)
 	if err != nil {
