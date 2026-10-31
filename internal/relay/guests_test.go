@@ -230,6 +230,15 @@ func TestGuestSendFieldsAreDefaultDeny(t *testing.T) {
 	}
 }
 
+// A schedule to a guest is refused as a send is, by the check a fire repeats.
+func TestScheduleToAGuestIsRefused(t *testing.T) {
+	m, _ := guestMesh(t, relay.Config{})
+	_, err := client.ScheduleAsk(t.Context(), m.Client(t, "muse"), client.ScheduledAsk{To: guestName, Body: "x", Every: time.Hour})
+	if !client.IsStatus(err, http.StatusBadRequest) {
+		t.Fatalf("schedule to a guest = %v, want 400", err)
+	}
+}
+
 // Only the relay marks a request. A teammate's from_guest means nothing.
 func TestClientFromGuestIgnored(t *testing.T) {
 	m, _ := guestMesh(t, relay.Config{})
