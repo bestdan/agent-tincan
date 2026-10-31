@@ -521,4 +521,11 @@ func TestGatewayRoomTools(t *testing.T) {
 	if _, isErr := callText("room_post", map[string]any{"room": "private", "message": "hi"}); !isErr {
 		t.Fatal("posted to a room chatgpt is not in")
 	}
+	// A lease over the gateway is held by the token's agent.
+	if out, isErr := callText("lease", map[string]any{"action": "acquire", "resource": "launch/copy"}); isErr || !strings.Contains(out, "Leased") {
+		t.Fatalf("lease = %q", out)
+	}
+	if out, isErr := callText("list_leases", nil); isErr || !strings.Contains(out, "chatgpt") {
+		t.Fatalf("list_leases = %q", out)
+	}
 }

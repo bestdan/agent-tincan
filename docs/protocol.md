@@ -442,6 +442,22 @@ A mention's text belongs to its room. A mention continues the poster's chain, so
 
 Audit rows `room_created`, `room_member_added`, `room_member_removed` and `room_posted` carry the room, ids, agent names and byte counts, never post text. Rooms live in `rooms`, `room_members` and `room_posts` tables, with no foreign key to `agents`, and a nullable `room_post_id` column on `requests`; an older relay opening the database ignores them, and mentions stop mirroring until the newer relay is back.
 
+## Work leases
+
+A work lease is a named, expiring, advisory claim on a resource, so teammates can see who has taken what. The relay advertises `"leases": true` in `GET /v1/capabilities`. A relay that predates leases answers 404 or 405 on these routes; a client that gets one checks capabilities and reports an upgrade message. Nothing about leases is added to any other route.
+
+A resource is an opaque string: the relay never reads it as a path or a repo. A resource ending in `*` is a prefix and covers everything that starts with the text before the star (`a/**` is the same prefix as `a/*`; a lone `*` covers every resource); any other resource, stars inside it included, is exact. So `a/*` overlaps `a/b`, `a/` and `a/b/*`, and does not overlap `ab` or `a`.
+
+- `POST /v1/leases` with `{"resource": "agent-tincan:internal/relay/*", "ttl_seconds": 7200, "note": "splitting server.go"}` takes a lease for the authenticated caller. `ttl_seconds` and `note` are optional. The body must be exactly one object with only those fields (400 otherwise). `resource` is required, and it and `note` are trimmed and must each be one line of at most 120 characters with no control characters (400 otherwise). `ttl_seconds` defaults to 3600 and must be between 1 and 86400 (400 otherwise). A new lease answers 201 with `{"resource", "holder", "note", "created_at", "expires_at"}`. Acquiring a resource the caller already holds renews it and answers 200 with the same fields and `"renewed": true`: the expiry restarts from now, and the note changes only when a new one is given.
+- A teammate's overlapping live lease answers 409 with `{"error": "\"a/*\" is held by muse until <RFC 3339>", "resource": "a/*", "holder": "muse", "expires_at": "<RFC 3339>"}`, where `resource` is the lease in the way. The caller's own leases never conflict with each other. An acquire is one transaction, so of two racing acquires exactly one wins.
+- A new lease past the caller's 32 live leases answers 409 with an `error` and no `holder`. A renewal is not refused at the cap.
+- `DELETE /v1/leases` with `{"resource": "a/*"}` drops the lease on exactly that resource and answers 200 with it. Only its holder, an admin device that also sends `"admin": true`, or the local admin socket may (403 otherwise, 404 when no live lease has that resource). Without that field an admin device gets no override, so an agent running on one releases as itself; the field gives nothing to a caller that is not an admin. Releasing `a/*` leaves a lease on `a/b` alone.
+- `GET /v1/leases` answers `{"leases": [...]}`, every live lease by resource, to any joined agent, admin device or the local admin socket.
+
+An expired lease is skipped by every read at once, can be taken with no call from its holder, and its row is cleared by the sweep or by the next acquire. `tincan remove` clears the agent's leases with it. A rebind keeps them, since the agent keeps its name.
+
+Audit rows `lease_acquired`, `lease_renewed`, `lease_released` (with `reason` `holder`, `admin` or `removed`) and `lease_expired` carry the resource, the holder and, on the first two, the TTL and the note's byte count, never the note. Leases live in a `work_leases` table with no foreign key to agents, since a rebind re-inserts the agent row.
+
 ## Recipient facts on send
 
 The `POST /v1/send` response is the queued request with one optional extra field, `target`, set when the recipient is on wake method `schedule`: `{"check_every_seconds": 300, "expect_reply_seconds": 600, "overdue": false}`, or on `webhook` or `email` and woken before: `{"woken_at": "...", "wake_result": "ok", "unanswered": true}`, with the roster's meanings. Those fields are omitted for other recipients, for requests held for owner approval, and by older relays, which older clients ignore. The relay does not store it, and `GET /v1/requests/{id}` never returns it; the tincan client copies it from the send response onto the result an ask returns, so the pending-reply text can say when to expect an answer.

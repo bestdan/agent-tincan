@@ -412,6 +412,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/agents/self/working-on", s.handleWorkingOn)
 	mux.HandleFunc("PUT /v1/agents/self/status", s.handleHostStatus)
 	mux.HandleFunc("POST /v1/watches", s.handleWatch)
+	mux.HandleFunc("POST /v1/leases", s.handleLeaseAcquire)
 	mux.HandleFunc("GET /v1/rooms", s.handleRooms)
 	mux.HandleFunc("GET /v1/rooms/{room}/posts", s.handleRoomRead)
 	mux.HandleFunc("POST /v1/rooms/{room}/posts", s.handleRoomPost)
@@ -447,6 +448,8 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/admin/wakes/{agent}", s.handleWakes)
 	mux.HandleFunc("POST /v1/admin/relay/upgrade", s.handleSelfUpgrade)
 	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("GET /v1/leases", s.handleLeases)
+	mux.HandleFunc("DELETE /v1/leases", s.handleLeaseRelease)
 	mux.HandleFunc("GET /v1/attachments/{id}", s.handleApprovalFetch)
 	mux.HandleFunc("GET "+phone.Prefix, s.handlePhone)
 	mux.HandleFunc("GET /v1/admin/push/key", s.handlePushKey)
@@ -569,6 +572,7 @@ func (s *Server) Sweep(ctx context.Context) {
 		log.Printf("watches: expire: %v", err)
 	}
 	s.checkWatches(ctx, "")
+	s.expireLeases(ctx)
 }
 
 // wakeRequeued wakes req's target for a request it may have looked past: a
@@ -1963,6 +1967,7 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 		// write the wake row back after the agent's row took it.
 		wr.Forget(in.Name)
 	}
+	leases := s.leasesOf(r.Context(), in.Name)
 	if err := s.dir.Remove(r.Context(), s.remote(r), in.Name); err != nil {
 		if forgot {
 			// The agent is still joined: give it back its wake state and
@@ -1997,6 +2002,9 @@ func (s *Server) handleRemove(w http.ResponseWriter, r *http.Request) {
 	delete(s.hostStatus, in.Name)
 	s.mu.Unlock()
 	s.record(r.Context(), "removed", "", "", in.Name, store.DetailJSON(map[string]any{"cancelled": len(ids)}))
+	for _, l := range leases {
+		s.record(r.Context(), "lease_released", "", "", in.Name, store.DetailJSON(map[string]any{"resource": l.Resource, "holder": l.Holder, "reason": "removed"}))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"removed": in.Name, "cancelled": len(ids)})
 }
 

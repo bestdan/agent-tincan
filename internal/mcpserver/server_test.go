@@ -1372,3 +1372,42 @@ func TestListAgentsShowsRecord(t *testing.T) {
 		}
 	}
 }
+
+// The lease tools take, renew, list and drop a lease over MCP; a conflict is
+// a tool error naming the holder, and only the holder can release.
+func TestLeaseTools(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	grok, muse := session(t, m, "grokbot"), session(t, m, "muse")
+	if out := call(t, grok, "list_leases", nil); !strings.Contains(out, "No leases") {
+		t.Fatalf("empty list_leases = %q", out)
+	}
+	if out := call(t, grok, "lease", map[string]any{"action": "acquire", "resource": "repo/internal/relay/*", "ttl_seconds": 1800, "note": "tests"}); !strings.Contains(out, "Leased") {
+		t.Fatalf("acquire = %q", out)
+	}
+	if out := call(t, grok, "lease", map[string]any{"action": "acquire", "resource": "repo/internal/relay/*"}); !strings.Contains(out, "Renewed") {
+		t.Fatalf("renew = %q", out)
+	}
+	if out := call(t, muse, "lease", map[string]any{"action": "acquire", "resource": "repo/internal/relay/server.go"}); !strings.HasPrefix(out, "ERROR:") || !strings.Contains(out, "grokbot") {
+		t.Fatalf("conflict = %q", out)
+	}
+	if out := call(t, muse, "list_leases", nil); !strings.Contains(out, "grokbot") || !strings.Contains(out, `note="tests"`) {
+		t.Fatalf("list_leases = %q", out)
+	}
+	if out := call(t, muse, "lease", map[string]any{"action": "release", "resource": "repo/internal/relay/*"}); !strings.HasPrefix(out, "ERROR:") {
+		t.Fatalf("teammate release = %q", out)
+	}
+	if out := call(t, grok, "lease", map[string]any{"action": "release", "resource": "repo/internal/relay/*"}); !strings.Contains(out, "Released") {
+		t.Fatalf("release = %q", out)
+	}
+	if out := call(t, grok, "lease", map[string]any{"action": "steal", "resource": "x"}); !strings.HasPrefix(out, "ERROR:") {
+		t.Fatalf("bad action = %q", out)
+	}
+	for _, ttl := range []int64{-1, 90000, 1 << 62} {
+		if out := call(t, grok, "lease", map[string]any{"action": "acquire", "resource": "x", "ttl_seconds": ttl}); !strings.HasPrefix(out, "ERROR:") {
+			t.Fatalf("ttl %d = %q", ttl, out)
+		}
+	}
+	if !strings.Contains(mcpserver.Instructions, "lease") {
+		t.Error("Instructions should mention leases")
+	}
+}
