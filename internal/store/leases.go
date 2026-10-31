@@ -88,14 +88,19 @@ func LeasesOverlap(a, b string) bool {
 // changes only if a new one is given. A new lease past limit live leases is
 // ErrLeaseLimit. The holder must still be in the directory (ErrNoAgent),
 // checked after that first write so a DeleteAgent cannot land in between and
-// leave a lease that a later agent joined under the name would inherit.
+// leave a lease that a later agent joined under the name would inherit. The
+// clock is read after that write too, so time spent waiting for the write
+// lock cannot use up a short lease or keep a lapsed one in the way.
 func (s *Store) AcquireLease(ctx context.Context, holder, resource, note string, ttl time.Duration, limit int) (LeaseGrant, error) {
-	now := s.now()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return LeaseGrant{}, err
 	}
 	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM work_leases WHERE 0`); err != nil { // takes the write lock
+		return LeaseGrant{}, err
+	}
+	now := s.now()
 	lapsed, err := expireLeasesTx(ctx, tx, now)
 	if err != nil {
 		return LeaseGrant{}, err

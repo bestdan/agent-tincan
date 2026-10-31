@@ -169,6 +169,60 @@ func TestExpiredLeaseCanBeTaken(t *testing.T) {
 	}
 }
 
+// The clock is read once the write lock is held. A lease that lapses while an
+// acquire waits for that lock frees its resource, and the new lease's expiry
+// starts from after the wait, so a short lease is not already over when
+// granted. The wait can be for this store's one connection or for another
+// connection on the file.
+func TestAcquireLeaseReadsClockAfterWriteLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	s, c := open(t, path)
+	other, _ := open(t, path)
+	ctx := context.Background()
+	joinAll(t, s, c, "muse", "codex")
+	var waited atomic.Int64 // read by the acquire while the test moves it
+	s.SetClock(func() time.Time { return c.now().Add(time.Duration(waited.Load())) })
+	for name, holder := range map[string]*Store{"same store": s, "other connection": other} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := s.AcquireLease(ctx, "muse", name, "", time.Minute, 32); err != nil {
+				t.Fatal(err)
+			}
+			tx, err := holder.db.BeginTx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			if _, err := tx.ExecContext(ctx, `DELETE FROM work_leases WHERE resource = 'no such lease'`); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			var got LeaseGrant
+			go func() {
+				var err error
+				got, err = s.AcquireLease(ctx, "codex", name, "", time.Second, 32)
+				done <- err
+			}()
+			time.Sleep(100 * time.Millisecond) // let the acquire reach the lock
+			waited.Add(int64(time.Hour))
+			if err := tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("acquire past a lease that lapsed in the wait: %v", err)
+			}
+			if want := s.now().Add(time.Second); !got.Lease.Expires.Equal(want) {
+				t.Fatalf("expires %v, want %v", got.Lease.Expires, want)
+			}
+			if len(got.Lapsed) != 1 || got.Lapsed[0].Holder != "muse" {
+				t.Fatalf("lapsed = %+v", got.Lapsed)
+			}
+			if _, err := s.ReleaseLease(ctx, name, "codex"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // A holder whose lease lapsed gets a fresh lease, not a renewal.
 func TestExpiredOwnLeaseIsNotARenewal(t *testing.T) {
 	s, c := open(t, ":memory:")

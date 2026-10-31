@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,6 +43,9 @@ command and names its holder and when it lapses. Leases are advisory and lapse
 on their own after --ttl, 24 hours at most.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if ttl <= 0 {
+				return errors.New("--ttl must be positive")
+			}
 			r, _, err := connect()
 			if err != nil {
 				return err

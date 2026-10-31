@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mvanhorn/agent-tincan/internal/client"
 	"github.com/mvanhorn/agent-tincan/internal/relay"
@@ -45,5 +46,28 @@ func TestLeaseCommands(t *testing.T) {
 	}
 	if out, err := run(t, leaseCmd(), "release", "shared", "--relay", m.URL("admin")); err != nil || !strings.Contains(out, "grokbot") {
 		t.Fatalf("admin release = %q, %v", out, err)
+	}
+}
+
+// A --ttl of zero or less is refused, even one that truncates to no seconds
+// and would otherwise ask the relay for its one-hour default. A positive
+// fraction of a second rounds up.
+func TestLeaseAcquireTTL(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	useConfig(t, client.Config{Relay: m.URL("muse"), Agent: "muse"})
+	for _, ttl := range []string{"-500ms", "-1ns", "-1s", "-1500ms", "0"} {
+		if out, err := run(t, leaseCmd(), "acquire", "x", "--ttl="+ttl); err == nil || !strings.Contains(err.Error(), "--ttl must be positive") {
+			t.Fatalf("--ttl=%s = %q, %v", ttl, out, err)
+		}
+	}
+	if out, err := run(t, leaseCmd(), "list"); err != nil || !strings.Contains(out, "No leases") {
+		t.Fatalf("refused acquires left a lease: %q, %v", out, err)
+	}
+	if out, err := run(t, leaseCmd(), "acquire", "x", "--ttl=500ms"); err != nil || !strings.Contains(out, "Leased") {
+		t.Fatalf("--ttl=500ms = %q, %v", out, err)
+	}
+	leases, err := client.ListLeases(t.Context(), m.Client(t, "muse"))
+	if err != nil || len(leases) != 1 || leases[0].ExpiresAt.Sub(leases[0].CreatedAt) != time.Second {
+		t.Fatalf("--ttl=500ms lease = %+v, %v", leases, err)
 	}
 }
