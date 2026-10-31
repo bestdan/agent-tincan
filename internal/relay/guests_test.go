@@ -381,6 +381,33 @@ func TestHeldListingShowsAGuestsWholeBody(t *testing.T) {
 	}
 }
 
+// A guest cannot stop the owner listing what is held. Whole guest bodies
+// share the follow-ons' budget, so past it they wait their turn, and one
+// that is cut cannot be approved unread.
+func TestHeldListFitsLongGuestBodies(t *testing.T) {
+	m, g := guestMesh(t, relay.Config{})
+	const size = 170 << 10 // each "<" is six bytes on the wire
+	admin := m.Client(t, "admin")
+	var last envelope.Request
+	for range 5 {
+		last = guestAsk(t, g, strings.Repeat("<", size))
+	}
+	held := heldList(t, admin)
+	if len(held) != 5 {
+		t.Fatalf("held %d, want 5", len(held))
+	}
+	if strings.Contains(held[0].Body, "not shown") || len(held[0].Body) < size {
+		t.Fatalf("oldest is cut: %d bytes", len(held[0].Body))
+	}
+	if !strings.Contains(held[4].Body, "not shown") || len(held[4].Body) > 2000 {
+		t.Fatalf("newest is not cut: %d bytes", len(held[4].Body))
+	}
+	err := admin.Raw(t.Context(), "POST", "/v1/admin/requests/"+last.ID+"/approve", nil, nil)
+	if e, ok := errors.AsType[*client.APIError](err); !ok || e.Code != http.StatusPreconditionFailed {
+		t.Fatalf("approve unread: %v", err)
+	}
+}
+
 // Approved, the ask reaches its teammate marked, and the fixed line in the
 // body tells an old client the same thing. A body cannot pass for a clean
 // first line either, so a guest cannot start a web chat's conversation:

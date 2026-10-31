@@ -177,7 +177,7 @@ receive 403:
 
 - `GET /v1/admin/held`: array of request envelopes, with bodies truncated to
   200 Unicode characters, including sender, chain and target. A held follow-on
-  keeps its whole body. The whole bodies of follow-ons and the `then` text of
+  or guest ask keeps its whole body. Those whole bodies and the `then` text of
   first requests share 3 MiB of the response, oldest first, so it stays under
   the 4 MiB a client reads. Past that, the text is cut to 200 characters with a
   note saying how much is not shown. Each entry may
