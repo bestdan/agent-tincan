@@ -283,7 +283,7 @@ func versionCheck(ctx context.Context, r *client.Relay, exe string) check {
 	if err != nil {
 		return check{"version", "warn", fmt.Sprintf("tincan %s; the relay does not say which release is current (%v)", Version, err), ""}
 	}
-	want := m.SHA256Of("tincan_" + runtime.GOOS + "_" + runtime.GOARCH)
+	want := m.SHA256Of(releaseAsset(runtime.GOOS, runtime.GOARCH))
 	have, err := fileSHA256(exe)
 	if want == "" || err != nil {
 		return check{"version", "warn", fmt.Sprintf("tincan %s; relay release %s has no build to compare for this platform", Version, m.Version), ""}

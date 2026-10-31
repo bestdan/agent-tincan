@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -45,6 +46,9 @@ func (f *relayWatchFlags) check() (string, error) {
 		return "", errors.New("--after must be positive")
 	case f.every <= 0:
 		return "", errors.New("--every must be positive")
+	}
+	if err := needsShell(runtime.GOOS, "tincan relay-watch"); err != nil {
+		return "", err
 	}
 	path := f.config
 	if path == "" {
