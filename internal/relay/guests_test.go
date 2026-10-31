@@ -239,6 +239,64 @@ func TestScheduleToAGuestIsRefused(t *testing.T) {
 	}
 }
 
+// A fire starts a new chain and is not marked, so a schedule made while
+// holding a guest's ask would shed the mark. With two claims Prepare can
+// continue neither, so the lookup that refuses other schedules finds none:
+// the marked one is refused on its own, approved or not, whichever claim came
+// first, until the marked claim closes.
+func TestScheduleRefusedDuringMarkedClaim(t *testing.T) {
+	ask := client.ScheduledAsk{To: "instinct", Body: "pass it on", Every: time.Hour}
+	for name, tc := range map[string]struct {
+		noHold      bool
+		markedFirst bool
+	}{
+		"approved, marked first":   {markedFirst: true},
+		"approved, marked last":    {},
+		"unapproved, marked first": {noHold: true, markedFirst: true},
+		"unapproved, marked last":  {noHold: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := testrelay.NewWithAdminLogin(t, relay.Config{})
+			g := m.JoinGuest(t, guestName, client.GuestInvite{Ask: []string{"muse"}, ForSeconds: guestFor, NoHold: tc.noHold})
+			muse := m.Client(t, "muse")
+			claimMarked := func() envelope.Request {
+				req := guestAsk(t, g, "guest text")
+				if !tc.noHold {
+					approve(t, m, req.ID)
+				}
+				return claimOne(t, muse, req.ID)
+			}
+			var marked envelope.Request
+			if tc.markedFirst {
+				marked = claimMarked()
+			}
+			other, err := m.Client(t, "grokbot").Send(t.Context(), "muse", "unrelated", envelope.KindAsk, "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claimOne(t, muse, other.ID)
+			if !tc.markedFirst {
+				marked = claimMarked()
+			}
+			if _, err := client.ScheduleAsk(t.Context(), muse, ask); !client.IsStatus(err, http.StatusConflict) {
+				t.Fatalf("two claims, one marked: %v", err)
+			}
+			if _, err := muse.Reply(t.Context(), other.ID, "done", envelope.StatusAnswered); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.ScheduleAsk(t.Context(), muse, ask); !client.IsStatus(err, http.StatusConflict) {
+				t.Fatalf("the marked claim alone: %v", err)
+			}
+			if _, err := muse.Reply(t.Context(), marked.ID, "done", envelope.StatusAnswered); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.ScheduleAsk(t.Context(), muse, ask); err != nil {
+				t.Fatalf("after the claims closed: %v", err)
+			}
+		})
+	}
+}
+
 // Only the relay marks a request. A teammate's from_guest means nothing.
 func TestClientFromGuestIgnored(t *testing.T) {
 	m, _ := guestMesh(t, relay.Config{})

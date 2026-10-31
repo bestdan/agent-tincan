@@ -32,8 +32,13 @@ var errScheduleDuringClaim = errors.New("you hold a claimed request and a schedu
 
 // holdsClaim reports whether a send from agent in session would continue a
 // claim, the way policy.Prepare decides it: the session's own claim, or else
-// the agent-wide one, which a session cannot step out of.
+// the agent-wide one, which a session cannot step out of. A claim a guest's
+// ask led to counts however many others agent holds, as it does for the mark
+// on a send, because a fire carries no mark and would shed it.
 func (s *Server) holdsClaim(ctx context.Context, agent, session string) (bool, error) {
+	if marked, _, err := s.store.OpenGuestClaims(ctx, agent); marked > 0 || err != nil {
+		return marked > 0, err
+	}
 	if session != "" {
 		if _, ok, err := s.store.OpenClaimFor(ctx, agent, session); ok || err != nil {
 			return ok, err
