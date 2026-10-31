@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,7 +172,10 @@ func (p *Policy) Prepare(ctx context.Context, req *envelope.Request) error {
 // only had delivered is the one case the count misses, so it is read too.
 // GuestApproved says the owner approved all of them. A follow-on never
 // inherits that, for the reason holdByKind gets no parent for it. The body
-// line is added here, once, for clients that ignore the field.
+// line is added here, once, for clients that ignore the field: first and with
+// its text framed on what a guest wrote, so it can choose no conversation or
+// form and cannot pass for another request, and through markedBody on what a
+// teammate wrote.
 func (p *Policy) markGuest(ctx context.Context, req *envelope.Request, sender identity.Agent, parent envelope.Request, hasParent bool) error {
 	if sender.Guest.Set() {
 		req.FromGuest, req.GuestApproved = true, false
@@ -183,10 +187,31 @@ func (p *Policy) markGuest(ctx context.Context, req *envelope.Request, sender id
 		req.FromGuest = marked > 0 || (hasParent && parent.FromGuest)
 		req.GuestApproved = req.FromGuest && unapproved == 0 && (!hasParent || !parent.FromGuest || parent.GuestApproved) && req.FollowOf == ""
 	}
-	if req.FromGuest {
-		req.Body = envelope.GuestLine + "\n\n" + req.Body
+	switch {
+	case sender.Guest.Set():
+		req.Body = envelope.GuestPrefix + envelope.GuestText(req.Body)
+	case req.FromGuest:
+		req.Body = p.markedBody(ctx, *req)
 	}
 	return nil
+}
+
+// structuredKinds parse a request's body as a form, so they get no body line.
+// They are programs, not models, and what they send on is marked in turn.
+var structuredKinds = map[string]bool{onboard.KindCouncil: true, onboard.KindPass: true, onboard.KindNotes: true, onboard.KindHistory: true}
+
+// markedBody is the body of a marked request a teammate wrote, with the
+// guest line where it keeps the teammate's first-line directive working: a
+// web teammate reads a threading line only as the first line. A failed kind
+// lookup keeps the line.
+func (p *Policy) markedBody(ctx context.Context, req envelope.Request) string {
+	if kind, err := p.kindOf(ctx, req.To); err == nil && structuredKinds[kind] {
+		return req.Body
+	}
+	if first, rest, _ := strings.Cut(req.Body, "\n"); envelope.IsThreadingLine(first) {
+		return first + "\n" + envelope.GuestPrefix + rest
+	}
+	return envelope.GuestPrefix + req.Body
 }
 
 // ErrMoveHeld refuses moving a request to a target whose asks are held

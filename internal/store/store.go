@@ -932,11 +932,13 @@ func (s *Store) CountUrgentQueued(ctx context.Context, agent string) (int, error
 // only query a request email reads, so it never returns a held request (or
 // one that was held and never approved), a ping, a notify, an ask built
 // from a room mention (its text is the room's, so its wake carries counts
-// only), or a request paused for input or already finished: none of those
-// may reach an email.
+// only), a request marked from_guest (an email cannot carry its framing, and
+// a mail reader holds no claim for the mark to follow, so it is taken through
+// the inbox), or a request paused for input or already finished: none of
+// those may reach an email.
 func (s *Store) OpenAsks(ctx context.Context, agent string) ([]envelope.Request, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+requestCols+` FROM requests
-		WHERE to_agent = ? AND kind = ? AND status IN (?, ?, ?) AND expires_at > ? AND NOT (was_held = 1 AND approved = 0) AND room_post_id IS NULL
+		WHERE to_agent = ? AND kind = ? AND status IN (?, ?, ?) AND expires_at > ? AND NOT (was_held = 1 AND approved = 0) AND room_post_id IS NULL AND from_guest = 0
 		ORDER BY urgent DESC, created_at, rowid`,
 		agent, string(envelope.KindAsk), string(envelope.StatusQueued), string(envelope.StatusDelivered), string(envelope.StatusClaimed), s.now().UnixMilli())
 	if err != nil {

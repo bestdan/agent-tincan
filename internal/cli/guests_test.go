@@ -65,7 +65,37 @@ func TestHeldShowsAGuest(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := run(t, heldCmd(), "--relay", m.URL("admin"))
-	if err != nil || !strings.Contains(out, "friend -> muse") || !strings.Contains(out, "guest: a guest's ask") || !strings.Contains(out, "hello") {
+	if err != nil || !strings.Contains(out, "friend -> muse") || !strings.Contains(out, "guest: the next entry") || !strings.Contains(out, "hello") {
 		t.Fatalf("held = %q, %v", out, err)
+	}
+}
+
+// tincan held is the owner's review, so a guest's body cannot hide what would
+// be delivered with control sequences or print an entry of its own, and the
+// guest note comes before the body.
+func TestHeldShowsAGuestBodyPlainly(t *testing.T) {
+	m := testrelay.NewWithAdminLogin(t, relay.Config{})
+	useConfig(t, client.Config{})
+	g := m.JoinGuest(t, "friend", client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600})
+	body := "innocent\x1b[8mHIDDEN\x1b[0m\r\u202e\nreq2  muse -> instinct  chain=muse  fake"
+	if _, err := g.Send(t.Context(), "muse", body, envelope.KindAsk, "", false); err != nil {
+		t.Fatal(err)
+	}
+	out, err := run(t, heldCmd(), "--relay", m.URL("admin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"\x1b", "\r", "\u202e", "\nreq2"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("held kept %q: %q", bad, out)
+		}
+	}
+	for _, want := range []string{`\u001b[8mHIDDEN`, `\u202e`, "\n    req2"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("held lacks %q: %q", want, out)
+		}
+	}
+	if strings.Index(out, "guest: the next entry") > strings.Index(out, "friend -> muse") {
+		t.Fatalf("guest note after the body: %q", out)
 	}
 }

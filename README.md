@@ -857,7 +857,7 @@ tincan join <code> --relay http://tincan-relay --proxy http://localhost:1055   #
 
 #### How it wakes
 
-Webhook. The relay POSTs `{"source":"agent-tincan","message":"Agent Tincan: 2 requests from your teammates waiting. Run check_inbox ..."}` with the bearer token. Grok Bot calls `check_inbox`. The same wake can mean a reply to one of its own requests is waiting, which `check_inbox` shows.
+Webhook. The relay POSTs `{"source":"agent-tincan","message":"Agent Tincan: 2 requests waiting. Run check_inbox ..."}` with the bearer token. Grok Bot calls `check_inbox`. The same wake can mean a reply to one of its own requests is waiting, which `check_inbox` shows.
 
 #### How it sends and receives
 

@@ -1333,3 +1333,14 @@ func TestInstructionsCoverGuests(t *testing.T) {
 		t.Fatal("Instructions should say an unapproved guest request is outside input")
 	}
 }
+
+// A teammate on an admin device gets the admin roster, and list_agents still
+// shows it no guest.
+func TestListAgentsLeavesOutGuests(t *testing.T) {
+	m := testrelay.NewWithAdminLogin(t, relay.Config{})
+	m.JoinGuest(t, "friend", client.GuestInvite{Ask: []string{"muse"}, ForSeconds: 3600})
+	m.JoinOnMachineOf(t, "admin", "laptop")
+	if out := call(t, session(t, m, "laptop"), "list_agents", nil); strings.Contains(out, "friend") || !strings.Contains(out, "muse") {
+		t.Fatalf("list_agents = %q", out)
+	}
+}

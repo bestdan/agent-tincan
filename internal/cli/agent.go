@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -1057,10 +1058,11 @@ func heldCmd() *cobra.Command {
 				if req.ToKind != "" {
 					to += " (" + req.ToKind + ")"
 				}
-				cmd.Printf("%s  %s -> %s  chain=%s  %s\n", req.ID, req.From, to, strings.Join(req.Chain, " -> "), req.Body)
+				// Above the body, which a long one could push out of view.
 				if req.FromGuest {
-					cmd.Printf("  guest: a guest's ask, or work that follows from one\n")
+					cmd.Printf("guest: the next entry is a guest's ask, or work that follows from one\n")
 				}
+				cmd.Printf("%s  %s -> %s  chain=%s  %s\n", req.ID, req.From, to, strings.Join(req.Chain, " -> "), heldText(req.Body))
 				switch {
 				case req.Pass != nil:
 					cmd.Printf("  pass: %s conversation %s -> %s\n", history.SourceLabel(history.Source(req.Pass.Source)), req.Pass.ConversationID, req.Pass.To)
@@ -1068,7 +1070,7 @@ func heldCmd() *cobra.Command {
 					cmd.Printf("  pass: will fail: %s\n", req.PassError)
 				}
 				if req.Then != nil {
-					cmd.Printf("  then, once answered: asks %s: %s\n", req.Then.To, req.Then.Body)
+					cmd.Printf("  then, once answered: asks %s: %s\n", req.Then.To, heldText(req.Then.Body))
 				}
 				for _, a := range req.Attachments {
 					cmd.Printf("  attachment: %s (%d bytes)\n", a.Name, a.Size)
@@ -1079,6 +1081,26 @@ func heldCmd() *cobra.Command {
 	cmd.Flags().StringVar(&socket, "socket", "", "local admin socket")
 	cmd.Flags().StringVar(&relayURL, "relay", "", "relay URL")
 	return cmd
+}
+
+// heldText is relay text for the owner's terminal, where reading it is the
+// review: a control sequence shows as its code instead of hiding what would
+// be delivered, and a later line is indented so it cannot pass for an entry.
+func heldText(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString("\n    ")
+		case r == '\t':
+			b.WriteRune(r)
+		case unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp):
+			fmt.Fprintf(&b, "\\u%04x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func approvalCmd(action string) *cobra.Command {

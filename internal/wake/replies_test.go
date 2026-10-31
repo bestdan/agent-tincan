@@ -219,7 +219,7 @@ func TestWaitingMessage(t *testing.T) {
 		{2, 0, Message(2)},
 		{0, 1, "Agent Tincan: 1 reply to your request is waiting. Run check_inbox (or `tincan inbox`) to read it."},
 		{0, 3, "Agent Tincan: 3 replies to your requests are waiting. Run check_inbox (or `tincan inbox`) to read them."},
-		{1, 2, "Agent Tincan: 1 request from your teammates and 2 replies to your requests waiting. Run check_inbox (or `tincan inbox`) before other work to read the replies and pick up the request, then reply to it."},
+		{1, 2, "Agent Tincan: 1 request and 2 replies to your requests waiting. Run check_inbox (or `tincan inbox`) before other work to read the replies and pick up the request, then reply to it."},
 	} {
 		if got := WaitingMessage(tc.requests, tc.replies); got != tc.want {
 			t.Errorf("WaitingMessage(%d, %d) = %q, want %q", tc.requests, tc.replies, got, tc.want)

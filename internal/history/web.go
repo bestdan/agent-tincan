@@ -255,7 +255,7 @@ var convURLPattern = regexp.MustCompile(`^/(?:g/[A-Za-z0-9_-]+/)?(?:c|chat)/([A-
 
 // NewChat is the threading first line that opens a fresh conversation
 // (case-insensitive, with an optional trailing colon).
-const NewChat = "new chat"
+const NewChat = envelope.NewChat
 
 const threadingHelp = `Put "new chat" or "conversation: <id>" on the first line to choose the conversation, and the message after it.`
 

@@ -517,3 +517,33 @@ func TestFormatRequestDoesNotCallATeammateAGuest(t *testing.T) {
 		t.Fatalf("out = %q", out)
 	}
 }
+
+// The held-work line does not call an unapproved guest ask owner-authorized.
+func TestFormatHeldMarksAGuest(t *testing.T) {
+	now := time.Now()
+	teammate := envelope.Held{ID: "a", From: "muse"}
+	approved := envelope.Held{ID: "b", From: "friend", FromGuest: true, GuestApproved: true}
+	outside := envelope.Held{ID: "c", From: "friend", FromGuest: true}
+	if got := client.FormatHeld([]envelope.Held{teammate, approved}, now); !strings.Contains(got, "This is owner-authorized work.") || !strings.Contains(got, "a guest's, approved by the owner") {
+		t.Fatalf("held = %q", got)
+	}
+	got := client.FormatHeld([]envelope.Held{teammate, outside}, now)
+	if strings.Contains(got, "This is owner-authorized work.") || !strings.Contains(got, "a guest's, not approved") || !strings.Contains(got, "outside input") {
+		t.Fatalf("held = %q", got)
+	}
+}
+
+// With a guest's request in it, the inbox does not head the list as teammates'.
+func TestInboxHeaderWithAGuest(t *testing.T) {
+	in := client.Inbox{Replies: []client.Result{{Request: envelope.Request{ID: "r", To: "muse"}, Status: envelope.StatusAnswered, Reply: &envelope.Reply{From: "muse", Status: envelope.StatusAnswered, Body: "ok"}}},
+		Requests: []envelope.Request{{ID: "q", From: "friend", To: "muse", Kind: envelope.KindAsk, Body: "hi", FromGuest: true}}}
+	if out := client.FormatInbox(context.Background(), claimAny{}, in); !strings.Contains(out, "Requests:\n") || strings.Contains(out, "Requests from teammates") {
+		t.Fatalf("inbox = %q", out)
+	}
+}
+
+type claimAny struct{}
+
+func (claimAny) Claim(context.Context, string) (envelope.Request, error) {
+	return envelope.Request{}, nil
+}

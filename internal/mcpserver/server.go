@@ -475,6 +475,11 @@ func NewWithOptions(b Backend, version string, opts *mcp.ServerOptions, more ...
 			var out strings.Builder
 			now := time.Now()
 			for _, a := range agents {
+				// An admin device's roster lists guests, which are no one to
+				// ask or to choose from.
+				if !a.GuestUntil.IsZero() {
+					continue
+				}
 				fmt.Fprintf(&out, "%s: %s", a.Name, a.State())
 				if status := a.StatusField(now); status != "" {
 					fmt.Fprintf(&out, ", %s", status)

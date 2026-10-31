@@ -400,15 +400,17 @@ A send to a guest, a `then` to a guest, a watch on a guest (404, as for an unkno
 
 Teammates' rosters leave guests out. An admin's roster lists them with `guest_until`. A note to a guest suggests only its listed teammates, and a note to anyone else never suggests a guest.
 
-`Prepare` marks a request `from_guest` when a guest sent it, or when its sender holds a claim on a marked request, however the request found its parent: a named `parent_id`, the session guard, or several open claims. It puts this line and a blank line in front of the body, once, for clients that ignore the field:
+`Prepare` marks a request `from_guest` when a guest sent it, or when its sender holds a claim on a marked request, however the request found its parent: a named `parent_id`, the session guard, or several open claims. It puts this line and a blank line in front of the body, once, for clients that ignore the field. A teammate's threading line (`new chat`, `conversation: <id>`) stays first with this line after it, and a request to a council, pass, notes or history agent gets no line, since those parse the body as a form. A request stays marked in `from_guest` either way:
 
 ```text
 [Agent Tincan: this request comes from a guest, outside the team.]
 ```
 
-A marked request that is not `guest_approved` is held after the rate check and before `approval.json` is read, so no gate entry can lift it, and it takes its hold TTL and notify target from the file. `no_hold` lifts that default hold for the guest's own asks and is audited on `guest_invited`; `approval.json` and the kind holds still apply, and what a teammate sends from an unapproved guest ask is held anyway. Approving sets `guest_approved`, and a request sent from approved work is `guest_approved` too and passes this hold. A follow-on never inherits it. Failover never moves a marked request. `GET /v1/admin/held` shows a marked request's whole body, not a preview.
+What a guest wrote, in a send or in an answer, goes between delimiters with a random nonce and a fixed line saying whose text it is. A marked request is left out of request emails and reaches an email agent as a count.
 
-`from_guest` and `guest_approved` are optional, and an older client ignores them, which the body line is there for.
+A marked request that is not `guest_approved` is held after the rate check and before `approval.json` is read, so no gate entry can lift it, and it takes its hold TTL and notify target from the file. `no_hold` lifts that default hold for the guest's own asks and is audited on `guest_invited`; `approval.json` and the kind holds still apply, and what a teammate sends from an unapproved guest ask is held anyway. Approving sets `guest_approved`, and a request sent from approved work is `guest_approved` too and passes this hold. A guest's answer to a needs_input question clears it on that request. A follow-on never inherits it. Failover never moves a marked request. `GET /v1/admin/held` shows a marked request's whole body, not a preview.
+
+`from_guest` and `guest_approved` are optional, also on the entries of the held-claims header, and an older client ignores them, which the body line is there for.
 
 ## Agent roster
 

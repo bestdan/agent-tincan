@@ -68,7 +68,14 @@ func (s *Server) TellAskers(agent string, wk store.Wake) {
 				return
 			}
 		}
-		note := s.wakeNote(agent, wk, s.onlineTeammates(noticeRoster(roster, req.From), now, req.From, agent), now)
+		online := s.onlineTeammates(noticeRoster(roster, req.From), now, req.From, agent)
+		var note string
+		if guestAsker(roster, req.From) {
+			// How a teammate wakes and how that went are not a guest's to read.
+			note = fmt.Sprintf("%s has not picked this up yet. The request is still queued.", agent) + suggest(online, "If it can't wait, cancel it and ask")
+		} else {
+			note = s.wakeNote(agent, wk, online, now)
+		}
 		s.noteAndTell(ctx, req, store.NoteWake, 0, note, now)
 	}
 }

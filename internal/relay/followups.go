@@ -78,9 +78,6 @@ func (s *Server) followOnBar(ctx context.Context, first envelope.Request, to str
 	return "", nil
 }
 
-// guestLineGap is what Prepare puts between the guest line and a body.
-const guestLineGap = "\n\n"
-
 // webHeaderRoom is kept free in a follow-on to a web teammate for the
 // request line the web agent puts before the message it types.
 const webHeaderRoom = 128
@@ -95,7 +92,7 @@ func (s *Server) followOnLimit(ctx context.Context, agent string) (int, error) {
 		return 0, err
 	}
 	if ok && (onboard.IsWebChatKind(target.Kind) || onboard.IsHeldWebKind(target.Kind)) {
-		return webSendBudget - webHeaderRoom - len(envelope.GuestLine) - len(guestLineGap), nil
+		return webSendBudget - webHeaderRoom - len(envelope.GuestPrefix), nil
 	}
 	return envelope.DefaultMaxBody, nil
 }

@@ -221,6 +221,11 @@ func (s *Server) guestRoster(ctx context.Context, g identity.Agent) ([]client.Ag
 	return out, nil
 }
 
+// guestAsker reports whether asker is a guest on roster.
+func guestAsker(roster []identity.Agent, asker string) bool {
+	return slices.ContainsFunc(roster, func(a identity.Agent) bool { return a.Name == asker && a.Guest.Set() })
+}
+
 // noticeRoster is the roster a note to asker may suggest from: never a
 // guest, and for a guest asker only the teammates it may ask.
 func noticeRoster(roster []identity.Agent, asker string) []identity.Agent {

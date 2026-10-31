@@ -30,7 +30,11 @@ func (s *Server) handleAnswer(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	req, err := s.store.Answer(r.Context(), r.PathValue("id"), name, in.Body)
+	answer := s.store.Answer
+	if _, guest := guestOf(r.Context()); guest {
+		answer = s.store.AnswerAsGuest
+	}
+	req, err := answer(r.Context(), r.PathValue("id"), name, in.Body)
 	if err != nil {
 		writeErr(w, statusFor(err), err)
 		return
