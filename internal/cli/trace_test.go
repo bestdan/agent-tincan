@@ -138,7 +138,6 @@ func TestTraceDefaultOutputUnchanged(t *testing.T) {
 func TestTraceMarkdownCarriesTheWholeChain(t *testing.T) {
 	tr := traceFixture()
 	tr.Steps[0].Progress = &envelope.Progress{Note: "reading it now", By: "gemini-web", At: traceFixtureTime.Add(10 * time.Second)}
-	tr.Steps[0].RelayNote = &envelope.Progress{Note: "woken twice", By: "relay", At: traceFixtureTime.Add(20 * time.Second)}
 	tr.Steps[0].Exchanges = []envelope.Exchange{{Question: "which paper?", Answer: "the first one", At: traceFixtureTime.Add(30 * time.Second)}}
 	got := formatTraceMarkdown(tr)
 	for _, want := range []string{
@@ -155,15 +154,79 @@ func TestTraceMarkdownCarriesTheWholeChain(t *testing.T) {
 		"paper.pdf",
 		"error.log",
 		"reading it now",
-		"woken twice",
 		"which paper?",
 		"the first one",
 		"request would loop back",
-		"reply status failed",
+		`{"status":"failed"}`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+// The record keeps the audit detail the terminal view cuts or leaves out. The
+// text view of the same events stays the short one.
+func TestTraceMarkdownKeepsEventDetail(t *testing.T) {
+	const reason = "request would loop back to an agent already in this chain: muse is already in [codex gemini-web muse]"
+	rejected, err := json.Marshal(map[string]string{"to": "muse", "reason": reason})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := traceFixture()
+	tr.Events = []store.AuditEvent{
+		{Seq: 7, At: traceFixtureTime, Event: "rejected", Actor: "hermes", Detail: string(rejected)},
+		{Seq: 8, At: traceFixtureTime, Event: "moved", Actor: "relay", RequestID: "r1", Detail: `{"from":"claude-web","reason":"limited","to":"gemini-web"}`},
+		{Seq: 9, At: traceFixtureTime, Event: "claimed", Actor: "gemini-web", RequestID: "r1"},
+	}
+	got := formatTraceMarkdown(tr)
+	for _, want := range []string{
+		reason,
+		"moved relay r1 " + tr.Events[1].Detail + "\n",
+		"claimed gemini-web r1\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	text := formatTrace(tr)
+	if strings.Contains(text, reason) || strings.Contains(text, "limited") {
+		t.Fatalf("text view changed:\n%s", text)
+	}
+}
+
+// A progress note reaches an export only while its hop is claimed, because
+// that is all the trace route sends. The README says so.
+func TestTraceMarkdownNoteFollowsTheRelay(t *testing.T) {
+	m := testrelay.New(t, relay.Config{})
+	ctx := t.Context()
+	req, err := m.Client(t, "grokbot").Send(ctx, "muse", "book a table", envelope.KindAsk, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	muse := m.Client(t, "muse")
+	if _, err := muse.Claim(ctx, req.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := muse.Progress(ctx, req.ID, "calling them now"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runTrace(t, req.TraceID, "--format", "md", "--relay", m.URL("muse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "calling them now") {
+		t.Fatalf("claimed hop lost its note:\n%s", got)
+	}
+	if _, err := muse.Reply(ctx, req.ID, "booked", envelope.StatusAnswered); err != nil {
+		t.Fatal(err)
+	}
+	got, err = runTrace(t, req.TraceID, "--format", "md", "--relay", m.URL("muse"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "calling them now") || strings.Contains(got, "Note from") {
+		t.Fatalf("finished hop carries a note, so the README is out of date:\n%s", got)
 	}
 }
 

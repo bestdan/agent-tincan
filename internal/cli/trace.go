@@ -238,10 +238,8 @@ func formatTraceMarkdown(tr traceResp) string {
 				writeFenced(&b, "Answer", x.Answer)
 			}
 		}
-		for _, p := range []*envelope.Progress{st.Progress, st.RelayNote} {
-			if p != nil {
-				writeFenced(&b, fmt.Sprintf("Note from %s, %s", p.By, traceTime(p.At)), p.Note)
-			}
+		if p := st.Progress; p != nil { // the relay sends it only while a hop is claimed
+			writeFenced(&b, fmt.Sprintf("Note from %s, %s", p.By, traceTime(p.At)), p.Note)
 		}
 		if st.Reply != nil {
 			writeFenced(&b, fmt.Sprintf("Reply from %s, status %s, %s", st.Reply.From, st.Reply.Status, traceTime(st.Reply.CreatedAt)), st.Reply.Body)
@@ -250,8 +248,8 @@ func formatTraceMarkdown(tr traceResp) string {
 	}
 	if len(tr.Events) > 0 {
 		var ev strings.Builder
-		for _, e := range tr.Events {
-			fmt.Fprintf(&ev, "#%d %s %s %s %s%s\n", e.Seq, traceTime(e.At), e.Event, e.Actor, e.RequestID, traceEventDetail(e))
+		for _, e := range tr.Events { // the raw detail, since the terminal's summary cuts it
+			fmt.Fprintln(&ev, strings.TrimSpace(fmt.Sprintf("#%d %s %s %s %s %s", e.Seq, traceTime(e.At), e.Event, e.Actor, e.RequestID, e.Detail)))
 		}
 		b.WriteString("\n## Events\n")
 		writeFenced(&b, "", ev.String())
